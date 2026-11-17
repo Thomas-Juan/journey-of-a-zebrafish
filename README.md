@@ -8,6 +8,9 @@ pages of zebrafish history and a quiz after every level.
 
 ## Play
 
+**In a browser:** on [juanlab.org](https://juanlab.org/#games), press *Play in browser* (needs a
+keyboard; progress is kept in that browser).
+
 **Download:** the latest Windows and macOS builds are on the
 [Releases page](https://github.com/Thomas-Juan/journey-of-a-zebrafish/releases/latest).
 
@@ -35,6 +38,7 @@ Pushing a tag such as `v1.0` to GitHub builds both automatically and attaches th
 | Tab (on map) | Fishipedia - every notebook page you have found |
 | U (on map) | Upgrades, bought with collected food |
 | F11 | Fullscreen (the game always starts in a window) |
+| F3 | Show frame rate and sound status |
 
 Progress is saved automatically (3 save slots) in
 `%APPDATA%\JourneyOfAZebrafish` on Windows and
@@ -87,3 +91,7 @@ columns, and three stars per level on the map (cleared / all pages / D-A-N-I-O).
 Everything is in `game/` (Python + pygame-ce; all graphics and sound are generated in code).
 `facts.py` holds the historical facts and quiz questions if you want to correct or extend them.
 Rebuild the Windows exe with `build_windows.bat`.
+
+The same source runs in a browser: `python -m pygbag --build game` (after `pip install pygbag`)
+writes a web build to `game/build/web/`. In the browser, saves go to the browser's local storage
+and the certificate PDF is offered as a download.

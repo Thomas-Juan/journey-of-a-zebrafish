@@ -2,7 +2,11 @@
 """Shared constants, input, text and save helpers."""
 import json
 import os
+import sys
 import pygame
+
+WEB = sys.platform == "emscripten"      # running in a browser (pygbag build)
+WEB_KEY = "juanlab-journey-of-a-zebrafish-save"
 
 W, H = 960, 540
 TILE = 32
@@ -188,11 +192,21 @@ def new_slot(diff=1):
             "quiz": [0, 0], "seen": [], "done": False, "know": 0}
 
 
+def _read_save():
+    if WEB:
+        import platform
+        raw = platform.window.localStorage.getItem(WEB_KEY)
+        if not raw:
+            raise IOError("no save yet")
+        return str(raw)
+    with open(_path(), "r", encoding="utf-8") as f:
+        return f.read()
+
+
 def load_all():
     data = {"slots": [None, None, None], "opt": {"music": 6, "sfx": 7, "full": False}}
     try:
-        with open(_path(), "r", encoding="utf-8") as f:
-            d = json.load(f)
+        d = json.loads(_read_save())
         if isinstance(d.get("slots"), list) and len(d["slots"]) == 3:
             for i, s in enumerate(d["slots"]):
                 if s:
@@ -208,6 +222,13 @@ def load_all():
 
 
 def save_all(data):
+    if WEB:
+        try:
+            import platform
+            platform.window.localStorage.setItem(WEB_KEY, json.dumps(data))
+            return True
+        except Exception:
+            return False
     try:
         p = _path()
         tmp = p + ".tmp"

@@ -5,8 +5,11 @@ Each world has its own 16-bar tune built from a chord progression, a motif-based
 melody that lands on chord tones, an accompaniment, bass, drums and a stereo echo."""
 import math
 import random
+import sys
 import threading
 import pygame
+
+WEB = sys.platform == "emscripten"
 
 try:
     import numpy as np
@@ -37,7 +40,8 @@ def init():
         pygame.mixer.set_reserved(2)
         ok = True
         _build_sfx()
-        threading.Thread(target=_precompose, daemon=True).start()
+        if not WEB:
+            threading.Thread(target=_precompose, daemon=True).start()
     except Exception:
         ok = False
 
@@ -341,7 +345,7 @@ def _precompose():
 
 def prepare(key):
     """Compose a tune in the background so that starting it later does not stall the game."""
-    if ok and key not in _tunes:
+    if ok and not WEB and key not in _tunes:
         threading.Thread(target=lambda: _tune(key), daemon=True).start()
 
 

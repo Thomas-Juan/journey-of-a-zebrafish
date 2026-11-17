@@ -1,5 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Journey of a Zebrafish - entry point, menus, world map, saving."""
+# /// script
+# dependencies = [
+#   "pygame-ce",
+#   "numpy",
+# ]
+# ///
+"""Journey of a Zebrafish - entry point, menus, world map, saving.
+
+The same file runs on the desktop (python main.py) and in a browser (pygbag build)."""
+import asyncio
 import math
 import os
 import random
@@ -98,7 +107,7 @@ class Title:
         has = last is not None and self.app.data["slots"][last] is not None
         if has != self.has:
             self.has = has
-            self.menu = Menu((["Continue"] if has else []) + ["New game / load", "Options", "Quit"])
+            self.menu = Menu((["Continue"] if has else []) + ["New game / load", "Options"] + ([] if core.WEB else ["Quit"]))
         c = self.menu.update(inp)
         if c == "Continue":
             self.app.slot_i = last
@@ -111,11 +120,9 @@ class Title:
             self.app.running = False
 
     def draw(self, s):
-        s.blit(gfx.background(1), (0, 0))
-        far = gfx.parallax(1)
-        s.blit(far, (-(self.t * 0.2) % 1920 - 1920, 0))
-        s.blit(far, (-(self.t * 0.2) % 1920, 0))
-        s.blit(gfx.rays(), (math.sin(self.t * 0.007) * 50 - 110, 0))
+        back = gfx.backdrop(1)
+        s.blit(back, (-(self.t * 0.2) % 1920 - 1920, 0))
+        s.blit(back, (-(self.t * 0.2) % 1920, 0))
         for i in range(9):
             x = (self.t * (1 + i % 3 * 0.5) + i * 140) % (W + 100) - 50
             y = 120 + i * 44 + math.sin(self.t * 0.03 + i) * 12
@@ -125,7 +132,7 @@ class Title:
         n = len(self.menu.items)
         panel(s, (320, 222, 320, 30 + n * 44), alpha=205)
         self.menu.draw(s, 335, 240, 22, 44, 290)
-        draw_text(s, "Arrows / WASD: move    SPACE / ENTER: select    ESC: back    F11: fullscreen", (W / 2, H - 34), 14, (200, 220, 235), center=True)
+        draw_text(s, "Arrows / WASD: move    SPACE / ENTER: select    ESC: back" + ("" if core.WEB else "    F11: fullscreen"), (W / 2, H - 34), 14, (200, 220, 235), center=True)
 
 
 class Options:
@@ -830,10 +837,14 @@ class Certificate:
     def update(self, inp):
         self.t += 1
         if self.editing:
+            typed = "".join(e.text for e in self.app.events if e.type == pygame.TEXTINPUT)
+            if typed:
+                self.app.saw_text = True
+            elif core.WEB and not getattr(self.app, "saw_text", False):   # browsers that send no text events
+                typed = "".join(e.unicode for e in self.app.events if e.type == pygame.KEYDOWN and e.unicode and e.unicode.isprintable())
+            self.name = (self.name + typed)[:44]
             for e in self.app.events:
-                if e.type == pygame.TEXTINPUT and len(self.name) < 44:
-                    self.name += e.text
-                elif e.type == pygame.KEYDOWN:
+                if e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_BACKSPACE:
                         self.name = self.name[:-1]
                     elif e.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_ESCAPE):
@@ -847,10 +858,13 @@ class Certificate:
             self._start_edit()
         elif c == "Save as PDF":
             try:
-                path = certificate.save(self.name, self.st)
-                self.msg = "Saved: " + path
-                if not self.app.headless:
-                    certificate.open_file(path)
+                if core.WEB:
+                    self.msg = "Downloaded: " + certificate.download(self.name, self.st)
+                else:
+                    path = certificate.save(self.name, self.st)
+                    self.msg = "Saved: " + path
+                    if not self.app.headless:
+                        certificate.open_file(path)
             except Exception as err:
                 self.msg = "Could not save the PDF: %s" % err
         elif c == "Back":
@@ -882,7 +896,7 @@ class Certificate:
             draw_wrapped(s, "Type your name, then press ENTER.", (x, y + 56), 13, 280, (255, 244, 170))
         else:
             self.menu.draw(s, x - 4, y + 58, 16, 34, 286)
-            draw_wrapped(s, self.msg or "The PDF is saved in your Documents folder, under 'Journey of a Zebrafish'.", (16, 502), 12, 920, (170, 200, 220), lh=16)
+            draw_wrapped(s, self.msg or ("The PDF is downloaded by your browser." if core.WEB else "The PDF is saved in your Documents folder, under 'Journey of a Zebrafish'."), (16, 502), 12, 920, (170, 200, 220), lh=16)
 
 
 class App:
@@ -907,6 +921,8 @@ class App:
         self.running = True
         self.saved_t = 0
         self.events = []
+        self.show_fps = False
+        self.work_ms = 0.0
         self.stack = [Title(self)]
 
     @property
@@ -914,6 +930,9 @@ class App:
         return self.data["slots"][self.slot_i]
 
     def apply_display(self):
+        if core.WEB:                      # the browser page scales the canvas itself
+            self.screen = pygame.display.set_mode((W, H))
+            return
         flags = pygame.SCALED | pygame.RESIZABLE
         if self.data["opt"]["full"] and not self.headless:
             flags |= pygame.FULLSCREEN
@@ -970,10 +989,19 @@ class App:
         self.stack.pop()
         self.push(Result(self, play, first, new))
 
-    def frame(self, events):
+    def frame(self, events, steps=1):
+        """One drawn frame. steps > 1 runs extra game updates first, so a slow browser
+        shows fewer frames instead of running the game in slow motion."""
+        t0 = pygame.time.get_ticks()
         self.events = events
         self.inp.update(events)
         self.stack[-1].update(self.inp)
+        for _ in range(steps - 1):
+            if not self.stack:
+                break
+            self.events = []
+            self.inp.update([])
+            self.stack[-1].update(self.inp)
         if not self.stack:
             return
         k = len(self.stack) - 1
@@ -984,23 +1012,43 @@ class App:
         if self.saved_t > 0:
             self.saved_t -= 1
             draw_text(self.screen, "Game saved", (W - 16, H - 24), 14, (160, 255, 180), right=True)
+        self.work_ms = self.work_ms * 0.95 + (pygame.time.get_ticks() - t0) * 0.05
+        if self.show_fps and core.WEB and pygame.time.get_ticks() - getattr(self, "_rep", 0) > 1000:
+            self._rep = pygame.time.get_ticks()
+            try:
+                import platform
+                platform.window.document.title = "ZF %d fps %.1f ms sound=%s scene=%s" % (
+                    self.clock.get_fps(), self.work_ms, audio.ok, type(self.stack[-1]).__name__)
+            except Exception:
+                pass
+        if self.show_fps:      # F3: diagnostics
+            draw_text(self.screen, "%d fps   %.1f ms/frame   sound %s" % (self.clock.get_fps(), self.work_ms, "on" if audio.ok else "OFF"),
+                      (W / 2, H - 20), 14, (255, 255, 0), center=True, bold=True)
 
-    def run(self):
+    async def run(self):
+        dt = 16
         while self.running and self.stack:
             events = pygame.event.get()
             for e in events:
                 if e.type == pygame.QUIT:
                     self.running = False
+                elif e.type == pygame.KEYDOWN and e.key in (pygame.K_F3, pygame.K_BACKQUOTE):
+                    self.show_fps = not self.show_fps
                 elif e.type == pygame.KEYDOWN and e.key == pygame.K_F11:
                     self.data["opt"]["full"] = not self.data["opt"]["full"]
                     self.apply_display()
-            self.frame(events)
+            self.frame(events, 1 if dt < 25 else 2 if dt < 42 else 3)
             pygame.display.flip()
-            self.clock.tick(core.FPS)
+            dt = self.clock.tick(core.FPS)
+            await asyncio.sleep(0)        # lets the browser draw; harmless on the desktop
         if self.slot_i is not None:
             self.save()
         pygame.quit()
 
 
+async def main():
+    await App().run()
+
+
 if __name__ == "__main__":
-    App().run()
+    asyncio.run(main())

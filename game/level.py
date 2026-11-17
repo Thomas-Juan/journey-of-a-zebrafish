@@ -15,6 +15,7 @@ POWERS_BY_WORLD = {1: ["heart", "shoal", "shoal"], 2: ["heart", "shoal", "shoal"
 class Level:
     def __init__(self, spec):
         self.spec = spec
+        self._chunks = {}
         self.world = spec["world"]
         self.theme = spec.get("theme", self.world)
         self.style = spec["style"]
@@ -79,6 +80,8 @@ class Level:
     def put(self, x, y, v):
         if 0 <= x < self.w and 0 <= y < self.h:
             self.t[y][x] = v
+            for c in {(x - 1) // CHUNK, x // CHUNK, (x + 1) // CHUNK}:
+                self._chunks.pop(c, None)      # redraw the cached tiles around the change
 
     # ------------------------------------------------------------ terrain
     def _terrain(self):
@@ -495,58 +498,29 @@ class Level:
                 if fy is not None and self.free(x, fy - 1):
                     self.plants.append(((x + r.uniform(0.15, 0.85)) * TILE, (fy + 1) * TILE, r.randint(3, 8), r.uniform(0, 6), r.randint(0, 2)))
 
-    def draw(self, s, cx, cy, tick):
-        th = gfx.THEMES[self.theme]
-        s.blit(gfx.background(self.theme), (0, 0))
-        far = gfx.parallax(self.theme)
-        ox = -int(cx * 0.3) % far.get_width()
-        s.blit(far, (ox - far.get_width(), -int(cy * 0.3)))
-        s.blit(far, (ox, -int(cy * 0.3)))
-        s.blit(gfx.rays(), (math.sin(tick * 0.007) * 50 - 110 - (cx * 0.05) % 60, 0))
-        for mx, my, par, phs in self.motes:
-            x = int((mx - cx * par + math.sin(tick * 0.01 + phs) * 14) % (W - 2))
-            y = int((my - cy * par - tick * 0.12 * par) % H)
-            s.set_at((x, y), (225, 245, 255))
-            if par > 0.6:
-                s.set_at((x + 1, y), (190, 225, 245))
-        pc, pd = th["plant"], gfx.sh(th["plant"], -55)
-        for bx, by, n, phs, kind in self.plants:
-            x0 = bx - cx
-            if x0 < -40 or x0 > W + 40:
-                continue
-            y0 = by - cy
-            for blade in range(1 if kind == 0 else 3):
-                seg = 13 - blade * 3
-                pts = [(x0 + (blade - 1) * 5 * (kind > 0), y0)]
-                for k in range(1, n - blade + 1):
-                    sway = math.sin(tick * 0.035 + phs + k * 0.55 + blade) * k * 1.7
-                    pts.append((x0 + (blade - 1) * (5 + k * 1.5) * (kind > 0) + sway, y0 - k * seg))
-                if len(pts) > 1:
-                    pygame.draw.lines(s, pd, False, pts, 6 if kind == 0 else 4)
-                    pygame.draw.lines(s, pc, False, pts, 3 if kind == 0 else 2)
-                    if kind == 0:
-                        for k in range(1, len(pts) - 1, 2):
-                            px, py = pts[k]
-                            pygame.draw.ellipse(s, pc, (px - (11 if k % 4 == 1 else -1), py - 4, 11, 6))
-                    if kind == 2:
-                        pygame.draw.circle(s, gfx.sh(pc, 60), pts[-1], 3)
+    def _chunk(self, ci):
+        """Tiles are drawn once into 16-tile-wide strips and reused every frame.
+        Returns (surface, hazard tiles, water-surface tiles)."""
+        ch = self._chunks.get(ci)
+        if ch is not None:
+            return ch
+        if len(self._chunks) > 7:
+            del self._chunks[max(self._chunks, key=lambda k: abs(k - ci))]
+        surf = pygame.Surface((CHUNK * TILE, self.h * TILE + PAD), pygame.SRCALPHA)
         sky = gfx.sky(self.theme)
-        x0, y0 = int(cx // TILE), int(cy // TILE)
-        f = (tick // 20) % 2
-        sx = int(cx * 0.2)
-        skyoff = 110 if self.zero_g else 0
+        sh = sky.get_height()
         solid = self.solid
-        for ty in range(y0 - 1, y0 + H // TILE + 2):
-            py = ty * TILE - cy
-            for tx in range(x0, x0 + W // TILE + 2):
-                px = tx * TILE - cx
+        haz, top, glass = [], [], []
+        for ty in range(self.h):
+            py = ty * TILE + PAD
+            for tx in range(ci * CHUNK, ci * CHUNK + CHUNK):
+                px = (tx - ci * CHUNK) * TILE
                 t = self.get(tx, ty)
                 if t == T_WATER:
                     if self.get(tx, ty - 1) == T_AIR:
-                        s.blit(gfx.surface_strip((tick // 9 + tx) % 4), (px, py - 3))
-                    continue
-                if t == T_AIR:
-                    s.blit(sky, (px, py), ((px + sx) % W, max(0, min(sky.get_height() - TILE, int(py) + skyoff)), TILE, TILE))
+                        top.append((tx * TILE, ty * TILE - 3, tx))
+                elif t == T_AIR:
+                    surf.blit(sky, (px, py), ((tx * TILE) % W, min(sh - TILE, ty * TILE + gfx.SKY_TOP), TILE, TILE))
                 elif t == T_SOLID or t == T_GLASS or t == T_CRACK:
                     m = ((not solid(tx, ty - 1)) | (not solid(tx + 1, ty)) << 1 | (not solid(tx, ty + 1)) << 2 | (not solid(tx - 1, ty)) << 3)
                     if m == 0 and solid(tx, ty - 2) and solid(tx - 1, ty - 1) and solid(tx + 1, ty - 1):
@@ -557,16 +531,96 @@ class Level:
                         m &= 13
                     if ty >= self.h - 1:
                         m &= 11
-                    s.blit(gfx.glass(m) if t == T_GLASS else gfx.tile(self.theme, tx, ty, m), (px, py))
+                    if t == T_GLASS:          # see-through: drawn every frame, not baked in
+                        glass.append((tx * TILE, ty * TILE, m))
+                        continue
+                    surf.blit(gfx.tile(self.theme, tx, ty, m), (px, py))
                     if t == T_CRACK:
-                        s.blit(gfx.crack(), (px, py))
+                        surf.blit(gfx.crack(), (px, py))
                     elif (m & 1) and t == T_SOLID and self.theme in (1, 2) and m != 16:
-                        s.blit(gfx.tuft(self.theme, (tx * 5 + ty) % 4), (px, py - 9))
+                        surf.blit(gfx.tuft(self.theme, (tx * 5 + ty) % 4), (px, py - 9))
                 elif t == T_HAZ:
                     hang = solid(tx, ty - 1) or (self.get(tx, ty - 1) == T_HAZ and not solid(tx, ty + 1))
-                    s.blit(gfx.hazard(self.theme, f, hang), (px - 1, py - 1))
+                    haz.append((tx * TILE - 1, ty * TILE - 1, hang))
+        # everything baked in is fully opaque or fully clear, so the strip can use a colour key,
+        # which is much faster to draw than per-pixel transparency
+        fast = pygame.Surface(surf.get_size())
+        fast.fill(KEY)
+        fast.blit(surf, (0, 0))
+        fast.set_colorkey(KEY, pygame.RLEACCEL)
+        ch = self._chunks[ci] = (fast, haz, top, glass)
+        return ch
+
+    def draw(self, s, cx, cy, tick):
+        back = gfx.backdrop(self.theme)
+        ox = -int(cx * 0.3) % back.get_width()
+        s.blit(back, (ox - back.get_width(), 0))
+        s.blit(back, (ox, 0))
+        for mx, my, par, phs in self.motes:
+            x = int((mx - cx * par + math.sin(tick * 0.01 + phs) * 14) % (W - 2))
+            y = int((my - cy * par - tick * 0.12 * par) % H)
+            s.set_at((x, y), (225, 245, 255))
+            if par > 0.6:
+                s.set_at((x + 1, y), (190, 225, 245))
+        for bx, by, n, phs, kind in self.plants:
+            x0 = bx - cx
+            if -50 < x0 < W + 50:
+                im = plant_frame(self.theme, kind, n, int((tick * 0.035 + phs) / math.tau * PLANT_FRAMES) % PLANT_FRAMES)
+                s.blit(im, (x0 - im.get_width() // 2, by - cy - im.get_height()))
+        if cy < 0 and (self.air or self.zero_g):       # the camera is above the level: sky only
+            s.blit(gfx.sky(self.theme), (0, 0), (int(cx) % W, max(0, int(cy) + gfx.SKY_TOP), W, int(-cy) + 1))
+        f = (tick // 20) % 2
+        span = CHUNK * TILE
+        shown = [self._chunk(ci) for ci in range(int(cx // span), int((cx + W) // span) + 1)]
+        for k, ch in enumerate(shown):
+            s.blit(ch[0], ((int(cx // span) + k) * span - cx, -PAD - cy))
+        for surf, haz, top, glass in shown:
+            for gx, gy, m in glass:
+                if -TILE < gx - cx < W:
+                    s.blit(gfx.glass(m), (gx - cx, gy - cy))
+            for hx, hy, hang in haz:
+                s.blit(gfx.hazard(self.theme, f, hang), (hx - cx, hy - cy))
+            for wx, wy, tx in top:
+                if -TILE < wx - cx < W:
+                    s.blit(gfx.surface_strip((tick // 9 + tx) % 4), (wx - cx, wy - cy))
         if self.lilies:
             sy = self.air * TILE - cy - 7
             for lx, v in self.lilies:
                 if -40 < lx - cx < W + 40:
                     s.blit(gfx.lily(v), (lx - cx - 17, sy + math.sin(tick * 0.05 + lx) * 1.5))
+
+
+CHUNK = 16            # tiles per cached strip
+KEY = (255, 0, 254)   # colour that means 'see-through' in a cached strip
+PAD = 10              # room above row 0 for grass tufts
+PLANT_FRAMES = 12
+_plants = {}
+
+
+def plant_frame(theme, kind, n, fr):
+    """One animation frame of a swaying plant, drawn once and cached."""
+    key = (theme, kind, n, fr)
+    im = _plants.get(key)
+    if im is None:
+        pc = gfx.THEMES[theme]["plant"]
+        pd = gfx.sh(pc, -55)
+        w, hgt = 96, n * 13 + 12
+        im = pygame.Surface((w, hgt), pygame.SRCALPHA)
+        x0, y0, ph = w // 2, hgt, fr / PLANT_FRAMES * math.tau
+        for blade in range(1 if kind == 0 else 3):
+            seg = 13 - blade * 3
+            pts = [(x0 + (blade - 1) * 5 * (kind > 0), y0)]
+            for k in range(1, n - blade + 1):
+                sway = math.sin(ph + k * 0.55 + blade) * k * 1.7
+                pts.append((x0 + (blade - 1) * (5 + k * 1.5) * (kind > 0) + sway, y0 - k * seg))
+            if len(pts) > 1:
+                pygame.draw.lines(im, pd, False, pts, 6 if kind == 0 else 4)
+                pygame.draw.lines(im, pc, False, pts, 3 if kind == 0 else 2)
+                if kind == 0:
+                    for k in range(1, len(pts) - 1, 2):
+                        px, py = pts[k]
+                        pygame.draw.ellipse(im, pc, (px - (11 if k % 4 == 1 else -1), py - 4, 11, 6))
+                if kind == 2:
+                    pygame.draw.circle(im, gfx.sh(pc, 60), pts[-1], 3)
+        _plants[key] = im
+    return im

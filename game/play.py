@@ -7,7 +7,7 @@ import pygame
 import gfx
 import audio
 import quiz
-from core import (W, H, TILE, T_WATER, T_AIR, T_HAZ, T_CRACK, DIFF_HEARTS, DIFF_SPEED, draw_text, draw_wrapped,
+from core import (WEB, W, H, TILE, T_WATER, T_AIR, T_HAZ, T_CRACK, DIFF_HEARTS, DIFF_SPEED, draw_text, draw_wrapped,
                   panel, clamp)
 from level import Level
 from enemies import Enemy, Shot, BOSSES
@@ -611,7 +611,32 @@ class Play:
                 s.blit(wave, (0, 0))
                 for y in range(0, H, 24):
                     pygame.draw.circle(s, (255, 255, 255), (wx + 34 + math.sin(tick * 0.2 + y) * 8, y + 12), 12)
-        if self.spec.get("dark"):
+        if self.spec.get("dark") and WEB:
+            r = 260 if p.star else 190
+            x, y = int(p.x - cx), int(p.y - cy)
+            dk = (0, 0, 12)
+            s.fill(dk, (0, 0, W, max(0, y - r)))
+            s.fill(dk, (0, y + r, W, max(0, H - y - r)))
+            s.fill(dk, (0, y - r, max(0, x - r), 2 * r))
+            s.fill(dk, (x + r, y - r, max(0, W - x - r), 2 * r))
+            s.blit(gfx.dark_hole(r), (x - r, y - r))
+            for it in lv.items:        # things worth finding glow through the dark
+                k = it["kind"]
+                ix, iy = it["x"] - cx, it["y"] - cy
+                if -40 < ix < W + 40 and k in ("page", "power", "check", "goal", "letter"):
+                    if k == "page":
+                        s.blit(gfx.icon("page"), (ix - 13, iy - 16))
+                    elif k == "power":
+                        s.blit(gfx.icon("bubble"), (ix - 19, iy - 19))
+                        s.blit(gfx.icon("pw_" + it["name"]), (ix - 12, iy - 12))
+                    elif k == "check":
+                        s.blit(gfx.icon("check1" if it["on"] else "check"), (ix - 6, iy - 60))
+                    elif k == "goal":
+                        s.blit(gfx.icon("goal", (tick // 10) % 2), (ix - 48, iy - 75))
+                    else:
+                        pygame.draw.circle(s, (255, 205, 60), (ix, iy), 15)
+                        draw_text(s, "DANIO"[it["idx"]], (ix, iy - 13), 20, (90, 40, 10), center=True, bold=True, shadow=False)
+        elif self.spec.get("dark"):
             if self._dark is None:
                 self._dark = pygame.Surface((W, H), pygame.SRCALPHA)
             d = self._dark
@@ -627,7 +652,8 @@ class Play:
                 m = gfx.light_mask(r)
                 d.blit(m, (lx - cx - r, ly - cy - r), special_flags=pygame.BLEND_RGBA_SUB)
             s.blit(d, (0, 0))
-        s.blit(gfx.vignette(), (0, 0))
+        if not WEB:
+            s.blit(gfx.vignette(), (0, 0))
         self._hud(s)
         if self.state == "intro":
             self._card(s)

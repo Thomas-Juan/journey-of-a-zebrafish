@@ -201,8 +201,8 @@ def render(name, st, when=None):
     return s
 
 
-def write_pdf(path, surf, title="Certificate"):
-    """Write the surface as a one-page A4 landscape PDF (no external libraries needed)."""
+def pdf_bytes(surf, title="Certificate"):
+    """The surface as a one-page A4 landscape PDF (no external libraries needed)."""
     w, h = surf.get_size()
     img = zlib.compress(pygame.image.tobytes(surf, "RGB"), 6)
     pw, ph = 841.89, 595.28
@@ -229,8 +229,31 @@ def write_pdf(path, surf, title="Certificate"):
     for o in offs:
         out += ("%010d 00000 n \n" % o).encode("ascii")
     out += ("trailer\n<< /Size %d /Root 1 0 R /Info 6 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)).encode("ascii")
+    return bytes(out)
+
+
+def write_pdf(path, surf, title="Certificate"):
     with open(path, "wb") as f:
-        f.write(out)
+        f.write(pdf_bytes(surf, title))
+
+
+def file_name(name, st):
+    tier = max(0, st["tier"])
+    safe = "".join(ch for ch in name.strip() if ch.isalnum() or ch in " -_.").strip() or "Certificate"
+    return "%s - %s.pdf" % (TIERS[tier][0], safe)
+
+
+def download(name, st):
+    """Browser build: hand the PDF to the browser as a download."""
+    import base64
+    import platform
+    tier = max(0, st["tier"])
+    fn = file_name(name, st)
+    b64 = base64.b64encode(pdf_bytes(render(name, st), TIERS[tier][0] + " - " + name)).decode("ascii")
+    js = ("(function(){var a=document.createElement('a');a.href='data:application/pdf;base64,%s';"
+          "a.download=%r;document.body.appendChild(a);a.click();a.remove();})()") % (b64, fn.encode("ascii", "replace").decode("ascii"))
+    platform.window.eval(js)
+    return fn
 
 
 def out_dir():
@@ -248,8 +271,7 @@ def out_dir():
 
 def save(name, st):
     tier = max(0, st["tier"])
-    safe = "".join(ch for ch in name.strip() if ch.isalnum() or ch in " -_.").strip() or "Certificate"
-    path = os.path.join(out_dir(), "%s - %s.pdf" % (TIERS[tier][0], safe))
+    path = os.path.join(out_dir(), file_name(name, st))
     write_pdf(path, render(name, st), TIERS[tier][0] + " - " + name)
     return path
 

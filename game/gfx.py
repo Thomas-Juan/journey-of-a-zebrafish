@@ -911,6 +911,7 @@ def surface_strip(f):
 
 
 SKY_H = 200
+SKY_TOP = 110
 
 
 def sky(theme):
@@ -998,11 +999,44 @@ def sky(theme):
             PD.circle(s, (150, 210, 255), (480, SKY_H + 1250), 1320, 5)
         for _ in range(170 if theme == 5 else 520):
             PD.circle(s, (255, 255, 255), (rnd.randint(0, W), rnd.randint(0, SKY_H - 44)), rnd.choice((1, 1, 1, 2)))
-    out = pygame.Surface((W * 2, SKY_H))
+    if theme != 7:      # 110 px of head-room above the level, for when the camera follows a leap
+        tall = pygame.Surface((W, SKY_H + SKY_TOP))
+        tall.blit(pygame.transform.scale(s.subsurface((0, 0, W, 1)), (W, SKY_TOP)), (0, 0))
+        tall.blit(s, (0, SKY_TOP))
+        s = tall
+    out = pygame.Surface((W * 2, s.get_height()))
     out.blit(s, (0, 0))
     out.blit(s, (W, 0))
     _cache[key] = out
     return out
+
+
+def backdrop(theme):
+    """Water gradient, far silhouettes and light rays baked into one opaque, 1920-px-wide
+    picture. One plain copy per frame instead of three transparent layers."""
+    key = ("BACK", theme)
+    if key not in _cache:
+        far = parallax(theme)
+        s = pygame.Surface((far.get_width(), H))
+        for x in range(0, far.get_width(), W):
+            s.blit(background(theme), (x, 0))
+        s.blit(far, (0, 0))
+        for x in (-110, W - 110):
+            s.blit(rays(), (x, 0))
+        _cache[key] = s
+    return _cache[key]
+
+
+def dark_hole(r):
+    """Darkness with a soft see-through hole, for dark levels in the browser."""
+    key = ("HOLE", r)
+    if key not in _cache:
+        s = pygame.Surface((r * 2, r * 2), A)
+        s.fill((0, 0, 12, 255))
+        for i in range(r, 0, -4):
+            PD.circle(s, (0, 0, 12, int(255 * (i / r) ** 2.2)), (r, r), i)
+        _cache[key] = s
+    return _cache[key]
 
 
 def light_mask(r):
