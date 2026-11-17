@@ -1,0 +1,11 @@
+# build outputs (downloads are attached to GitHub Releases instead)
+*.exe
+/build/
+/dist/
+/dist-mac/
+/build-mac/
+/.venv-mac/
+*.spec
+__pycache__/
+*.pyc
+.claude/
