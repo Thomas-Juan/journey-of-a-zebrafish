@@ -5,7 +5,7 @@ import random
 import pygame
 import gfx
 import audio
-from core import TILE, T_WATER, T_AIR, draw_text
+from core import dr, hsurf, TILE, T_WATER, T_AIR, draw_text
 from worlds import ETYPES, SPLIT_INTO, BEAM
 
 rnd = random.Random(7)
@@ -321,12 +321,12 @@ class Enemy:
         if self.ai == "beam":
             r = self.brect.move(-cx, -cy)
             if self.on:
-                b = pygame.Surface(r.size, pygame.SRCALPHA)
+                b = hsurf(*r.size)
                 b.fill(self.bcol + (120 + (tick % 6) * 12,))
                 s.blit(b, r.topleft)
-                pygame.draw.rect(s, (255, 255, 255), (r.centerx - 3, r.y, 6, r.h))
+                dr.rect(s, (255, 255, 255), (r.centerx - 3, r.y, 6, r.h))
             elif self.warn and tick % 8 < 4:
-                pygame.draw.line(s, self.bcol, (r.centerx, r.y), (r.centerx, r.bottom), 2)
+                dr.line(s, self.bcol, (r.centerx, r.y), (r.centerx, r.bottom), 2)
         im = gfx.spr(self.skin, (tick // 10) % 2, self.dir < 0 and self.ai not in ("dive", "beam", "emit", "vortex"))
         x, y = self.x - cx - im.get_width() / 2, self.y - cy - im.get_height() / 2
         if self.state == "tele":
@@ -477,7 +477,7 @@ class Cat(Boss):
         face = gfx.spr("b_cat", (tick // 30) % 2)
         s.blit(face, (max(0, min(700, self.x - 130)) - cx, -34 - cy))
         if self.state == "tele":
-            pygame.draw.line(s, (255, 60, 60), (self.x - cx, self.TOP - cy), (self.x - cx, self.BOT - cy), 2)
+            dr.line(s, (255, 60, 60), (self.x - cx, self.TOP - cy), (self.x - cx, self.BOT - cy), 2)
         if self.hurt and tick % 6 < 3:
             return
         im = gfx.spr("b_paw")
@@ -674,10 +674,10 @@ class Reviewer2(Boss):
         for y, t in self.beams:
             if t >= 40:
                 if tick % 8 < 4:
-                    pygame.draw.line(s, (255, 90, 90), (0, y - cy), (960, y - cy), 1)
+                    dr.line(s, (255, 90, 90), (0, y - cy), (960, y - cy), 1)
             else:
-                pygame.draw.rect(s, (255, 40, 40), (0, y - cy - 9, 960, 18))
-                pygame.draw.rect(s, (255, 220, 220), (0, y - cy - 3, 960, 6))
+                dr.rect(s, (255, 40, 40), (0, y - cy - 9, 960, 18))
+                dr.rect(s, (255, 220, 220), (0, y - cy - 3, 960, 6))
         Boss.draw(self, s, cx, cy, tick)
 
 

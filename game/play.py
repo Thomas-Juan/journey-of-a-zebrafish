@@ -4,11 +4,12 @@ import math
 import random
 from collections import deque
 import pygame
+import core
 import gfx
 import audio
 import quiz
-from core import (WEB, W, H, TILE, T_WATER, T_AIR, T_HAZ, T_CRACK, DIFF_HEARTS, DIFF_SPEED, draw_text, draw_wrapped,
-                  panel, clamp)
+from core import (dr, hsurf, WEB, W, H, TILE, T_WATER, T_AIR, T_HAZ, T_CRACK, DIFF_HEARTS, DIFF_SPEED, draw_text, draw_wrapped,
+                  panel, clamp, text_width)
 from level import Level
 from enemies import Enemy, Shot, BOSSES
 from facts import FACTS, fact_id
@@ -153,7 +154,7 @@ class Player:
 
     def draw(self, s, cx, cy, tick):
         if self.dead:
-            im = pygame.transform.flip(gfx.player("", 0, 0, self.face < 0), False, True)
+            im = gfx.player("", 0, 0, self.face < 0, upside_down=True)
             s.blit(im, (self.x - cx - 20, self.y - cy - 10))
             return
         fl = self.face < 0
@@ -171,7 +172,7 @@ class Player:
         im = gfx.player(var, (tick // (5 if moving else 14)) % 2, ang, fl)
         s.blit(im, (self.x - cx - im.get_width() / 2, self.y - cy - im.get_height() / 2))
         if self.dash_t:
-            pygame.draw.circle(s, (255, 255, 255), (self.x - cx - self.vx * 2, self.y - cy - self.vy * 2), 5, 1)
+            dr.circle(s, (255, 255, 255), (self.x - cx - self.vx * 2, self.y - cy - self.vy * 2), 5, 1)
 
 
 class Play:
@@ -540,19 +541,19 @@ class Play:
                 if fx:
                     yy = (i * 53) % zr.h
                     xx = zr.x + ((i * 197 + tick * fx * 4) % zr.w)
-                    pygame.draw.line(s, (255, 255, 255), (xx - cx, yy - cy), (xx - cx - fx * 14, yy - cy), 1)
+                    dr.line(s, (255, 255, 255), (xx - cx, yy - cy), (xx - cx - fx * 14, yy - cy), 1)
                 else:
                     xx = zr.x + (i * 37) % zr.w
                     yy = zr.y + ((i * 97 + tick * fy * 3) % zr.h)
-                    pygame.draw.circle(s, (225, 245, 255), (xx - cx, yy - cy), 2 + i % 3, 1)
+                    dr.circle(s, (225, 245, 255), (xx - cx, yy - cy), 2 + i % 3, 1)
                     if i % 4 == 0:
-                        pygame.draw.line(s, (255, 255, 255), (xx - cx, yy - cy + 8), (xx - cx, yy - cy + 8 + fy * 10), 1)
+                        dr.line(s, (255, 255, 255), (xx - cx, yy - cy + 8), (xx - cx, yy - cy + 8 + fy * 10), 1)
         for sx, text in lv.signs:
             x = sx * TILE - cx
-            if -420 < x < W:
-                wd = min(400, 20 + len(text) * 9)
+            wd = 20 + text_width(text, 15)
+            if -wd < x < W:
                 panel(s, (x, (lv.air + 0.4) * TILE - cy, wd, 30), alpha=170)
-                draw_text(s, text, (x + 10, (lv.air + 0.4) * TILE - cy + 5), 15, (255, 255, 220), shadow=False)
+                draw_text(s, text, (x + 10, (lv.air + 0.4) * TILE - cy + 15), 15, (255, 255, 220), shadow=False, mid=True)
         for it in lv.items:
             x, y = it["x"] - cx, it["y"] - cy
             if x < -100 or x > W + 100:
@@ -567,28 +568,27 @@ class Play:
                 s.blit(im, (x - 13, y - 16 + math.sin(tick * 0.08) * 3))
             elif k == "power":
                 s.blit(gfx.icon("bubble"), (x - 19, y - 19 + math.sin(tick * 0.06 + it["x"]) * 3))
-                s.blit(gfx.icon("pw_" + it["name"]), (x - 12, y - 12 + math.sin(tick * 0.06 + it["x"]) * 3))
+                im = gfx.icon("pw_" + it["name"])
+                s.blit(im, (x - im.get_width() / 2, y - im.get_height() / 2 + math.sin(tick * 0.06 + it["x"]) * 3))
             elif k == "letter":
                 yy = y + math.sin(tick * 0.07 + it["idx"]) * 4
-                pygame.draw.circle(s, (255, 205, 60), (x, yy), 15)
-                pygame.draw.circle(s, (150, 90, 20), (x, yy), 15, 2)
-                draw_text(s, "DANIO"[it["idx"]], (x, yy - 13), 20, (90, 40, 10), center=True, bold=True, shadow=False)
+                s.blit(gfx.coin("DANIO"[it["idx"]]), (x - 15, yy - 15))
             elif k == "jet":
                 r = 20 + (tick // 6) % 3 * 2
-                pygame.draw.circle(s, (255, 255, 255), (x, y), r, 3)
-                pygame.draw.circle(s, (140, 220, 255), (x, y), 14)
-                pygame.draw.line(s, (255, 255, 255), (x, y), (x + it["dx"] * 26, y + it["dy"] * 26), 4)
+                dr.circle(s, (255, 255, 255), (x, y), r, 3)
+                dr.circle(s, (140, 220, 255), (x, y), 14)
+                dr.line(s, (255, 255, 255), (x, y), (x + it["dx"] * 26, y + it["dy"] * 26), 4)
             elif k == "gate":
-                band = pygame.Surface((26, H), pygame.SRCALPHA)
+                band = hsurf(26, H)
                 band.fill((255, 225, 90, 70 + int(math.sin(tick * 0.1) * 25)))
                 s.blit(band, (x - 13, 0))
-                pygame.draw.line(s, (255, 244, 170), (x - 13, 0), (x - 13, H), 2)
-                pygame.draw.line(s, (255, 244, 170), (x + 13, 0), (x + 13, H), 2)
+                dr.line(s, (255, 244, 170), (x - 13, 0), (x - 13, H), 2)
+                dr.line(s, (255, 244, 170), (x + 13, 0), (x + 13, H), 2)
                 for q in range(4):
-                    draw_text(s, "?", (x, (q * 140 + tick) % H - 14), 22, (120, 70, 0), center=True, bold=True, shadow=False)
+                    draw_text(s, "?", (x, (q * 140 + tick) % H), 22, (120, 70, 0), center=True, bold=True, shadow=False, mid=True)
             elif k == "check":
                 if not it["on"]:
-                    beam = pygame.Surface((8, H), pygame.SRCALPHA)
+                    beam = hsurf(8, H)
                     beam.fill((255, 255, 255, 26))
                     s.blit(beam, (x - 4, 0))
                 s.blit(gfx.icon("check1" if it["on"] else "check"), (x - 6, y - 60))
@@ -602,15 +602,15 @@ class Play:
             sh.draw(s, cx, cy, tick)
         p.draw(s, cx, cy, tick)
         for q in self.parts:
-            pygame.draw.circle(s, q[5], (q[0] - cx, q[1] - cy), max(1, q[4] // 8))
+            dr.circle(s, q[5], (q[0] - cx, q[1] - cy), max(1, q[4] // 8))
         if self.spec.get("chase"):
             wx = self.chase_x - cx
             if wx > -40:
-                wave = pygame.Surface((max(1, int(wx) + 40), H), pygame.SRCALPHA)
+                wave = hsurf(max(1, int(wx) + 40), H)
                 wave.fill((120, 90, 60, 150) if self.world == 1 else (200, 40, 40, 110))
                 s.blit(wave, (0, 0))
                 for y in range(0, H, 24):
-                    pygame.draw.circle(s, (255, 255, 255), (wx + 34 + math.sin(tick * 0.2 + y) * 8, y + 12), 12)
+                    dr.circle(s, (255, 255, 255), (wx + 34 + math.sin(tick * 0.2 + y) * 8, y + 12), 12)
         if self.spec.get("dark") and WEB:
             r = 260 if p.star else 190
             x, y = int(p.x - cx), int(p.y - cy)
@@ -628,17 +628,17 @@ class Play:
                         s.blit(gfx.icon("page"), (ix - 13, iy - 16))
                     elif k == "power":
                         s.blit(gfx.icon("bubble"), (ix - 19, iy - 19))
-                        s.blit(gfx.icon("pw_" + it["name"]), (ix - 12, iy - 12))
+                        im = gfx.icon("pw_" + it["name"])
+                        s.blit(im, (ix - im.get_width() / 2, iy - im.get_height() / 2))
                     elif k == "check":
                         s.blit(gfx.icon("check1" if it["on"] else "check"), (ix - 6, iy - 60))
                     elif k == "goal":
                         s.blit(gfx.icon("goal", (tick // 10) % 2), (ix - 48, iy - 75))
                     else:
-                        pygame.draw.circle(s, (255, 205, 60), (ix, iy), 15)
-                        draw_text(s, "DANIO"[it["idx"]], (ix, iy - 13), 20, (90, 40, 10), center=True, bold=True, shadow=False)
+                        s.blit(gfx.coin("DANIO"[it["idx"]]), (ix - 15, iy - 15))
         elif self.spec.get("dark"):
-            if self._dark is None:
-                self._dark = pygame.Surface((W, H), pygame.SRCALPHA)
+            if self._dark is None or self._dark.k != core.K:     # (the graphics setting may have changed)
+                self._dark = hsurf(W, H)
             d = self._dark
             d.fill((0, 0, 12, 232))
             lights = [(p.x, p.y, 250 if p.star else 170)]
@@ -653,7 +653,7 @@ class Play:
                 d.blit(m, (lx - cx - r, ly - cy - r), special_flags=pygame.BLEND_RGBA_SUB)
             s.blit(d, (0, 0))
         if not WEB:
-            s.blit(gfx.vignette(), (0, 0))
+            gfx.draw_vignette(s)
         self._hud(s)
         if self.state == "intro":
             self._card(s)
@@ -672,30 +672,30 @@ class Play:
             for i in range(3):
                 s.blit(gfx.icon("page" if self.pages[i] else "page0"), (W - 100 + i * 30, 8))
         for i in range(0 if self.boss else 5):
-            draw_text(s, "DANIO"[i], (W - 104 + i * 19, 44), 17, (255, 205, 60) if self.letters[i] else (70, 80, 100), bold=True)
+            s.blit(gfx.coin("DANIO"[i], bool(self.letters[i]), 16), (W - 101 + i * 18, 46))
         x = 100
         for cond, ic, val in ((p.star, "pw_star", p.star / 480), (p.casper, "pw_casper", p.casper / 600), (p.crispr, "pw_crispr", 1)):
             if cond:
                 s.blit(gfx.icon(ic), (x, 34))
-                pygame.draw.rect(s, (255, 255, 255), (x, 60, 24 * val, 3))
+                dr.rect(s, (255, 255, 255), (x, 60, 24 * val, 3))
                 x += 32
         if p.dash_cd:
-            pygame.draw.rect(s, (120, 200, 255), (12, 64, 60 * (1 - p.dash_cd / self.dash_cd), 4))
+            dr.rect(s, (120, 200, 255), (12, 64, 60 * (1 - p.dash_cd / self.dash_cd), 4))
         else:
-            pygame.draw.rect(s, (255, 255, 255), (12, 64, 60, 4))
+            dr.rect(s, (255, 255, 255), (12, 64, 60, 4))
         draw_text(s, self.spec["id"].replace("B", "Boss") + "  " + self.spec["name"], (W / 2, 8), 15, (220, 240, 255), center=True)
         if self.boss and not self.boss.dead:
             b = self.boss
             panel(s, (W / 2 - 202, H - 34, 404, 22), alpha=200)
-            pygame.draw.rect(s, (230, 60, 70), (W / 2 - 198, H - 30, 396 * b.hp / b.maxhp, 14))
+            dr.rect(s, (230, 60, 70), (W / 2 - 198, H - 30, 396 * b.hp / b.maxhp, 14))
             draw_text(s, b.name, (W / 2, H - 56), 16, center=True, bold=True)
         draw_text(s, "ESC: menu", (W - 10, H - 20), 12, (200, 225, 240), right=True)
         if self.toast[1] > 0:
             draw_text(s, self.toast[0], (W / 2, 70), 18, (255, 255, 160), center=True, bold=True)
         if self.speech[1] > 0:
-            wd = 40 + len(self.speech[0]) * 10
+            wd = 40 + text_width(self.speech[0], 17)
             panel(s, (W / 2 - wd / 2, 96, wd, 36), fill=(250, 250, 240), border=(60, 40, 40), alpha=240)
-            draw_text(s, self.speech[0], (W / 2, 103), 17, (40, 20, 20), center=True, shadow=False)
+            draw_text(s, self.speech[0], (W / 2, 114), 17, (40, 20, 20), center=True, shadow=False, mid=True)
 
     def _card(self, s):
         sp = self.spec
@@ -725,7 +725,7 @@ class Play:
             elif k == q["sel"]:
                 col = (255, 240, 150)
             panel(s, (190, y + k * 50, 580, 42), border=col, alpha=210)
-            draw_text(s, o, (W / 2, y + 8 + k * 50), 18, col, center=True)
+            draw_text(s, o, (W / 2, y + 21 + k * 50), 18, col, center=True, mid=True)
         if q["answer"] is not None:
             ok = q["answer"] == q["correct"]
             draw_text(s, ("Correct!" if ok else "Wrong - the right answer is in green.") + ("   SPACE to continue" if self.lock == 0 else ""),
@@ -736,12 +736,12 @@ class Play:
     def _popup(self, s):
         when, title, text, new = self.popup
         panel(s, (130, 110, 700, 320), fill=(250, 246, 225), border=(170, 60, 60), alpha=250)
-        pygame.draw.rect(s, (200, 70, 70), (130, 110, 26, 320), border_top_left_radius=10, border_bottom_left_radius=10)
+        dr.rect(s, (200, 70, 70), (130, 110, 26, 320), border_top_left_radius=10, border_bottom_left_radius=10)
         draw_text(s, "LAB NOTEBOOK" + ("  -  new page!" if new else ""), (176, 124), 14, (150, 60, 60), shadow=False, bold=True)
         draw_text(s, when, (810, 124), 15, (90, 100, 140), shadow=False, right=True)
         draw_text(s, title, (176, 152), 28, (30, 40, 80), shadow=False, bold=True)
-        for i in range(9):
-            pygame.draw.line(s, (200, 210, 235), (176, 222 + i * 30, ), (806, 222 + i * 30), 1)
+        for i in range(7):          # ruled lines, within the page
+            dr.line(s, (200, 210, 235), (176, 222 + i * 30), (806, 222 + i * 30), 1)
         draw_wrapped(s, text, (176, 198), 20, 630, (40, 40, 60), lh=30)
         if self.lock == 0 and self.tick % 60 < 40:
             draw_text(s, "SPACE to continue", (W / 2, 400), 15, (150, 60, 60), center=True, shadow=False)

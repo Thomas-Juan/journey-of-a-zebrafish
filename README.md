@@ -92,6 +92,15 @@ Everything is in `game/` (Python + pygame-ce; all graphics and sound are generat
 `facts.py` holds the historical facts and quiz questions if you want to correct or extend them.
 Rebuild the Windows exe with `build_windows.bat`.
 
+The game is laid out on a 960 x 540 stage. On the desktop it is drawn at twice that resolution
+and scaled smoothly to the window, so it stays sharp in a large window or full screen
+(*Options > Graphics: sharp*). *Graphics: fast* draws at 960 x 540 for slower computers; the game
+switches to it by itself if a level cannot keep up. The browser version always uses the fast setting.
+`core.py` holds the drawing layer (`Hi`, `Canvas`, `dr`), `gfx.py` the sprites.
+
+The typeface is Inter by Rasmus Andersson (SIL Open Font License, `game/fonts/Inter-LICENSE.txt`),
+embedded in `game/fontdata.py` so it is the same in every build.
+
 The same source runs in a browser: `python -m pygbag --build game` (after `pip install pygbag`)
 writes a web build to `game/build/web/`. In the browser, saves go to the browser's local storage
 and the certificate PDF is offered as a download.

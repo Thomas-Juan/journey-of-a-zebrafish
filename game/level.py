@@ -4,7 +4,7 @@ import math
 import random
 import pygame
 import gfx
-from core import W, H, TILE, T_WATER, T_SOLID, T_AIR, T_HAZ, T_GLASS, T_CRACK
+from core import dr, hsurf, W, H, TILE, T_WATER, T_SOLID, T_AIR, T_HAZ, T_GLASS, T_CRACK
 from worlds import ETYPES
 
 POWERS_BY_WORLD = {1: ["heart", "shoal", "shoal"], 2: ["heart", "shoal", "shoal"], 3: ["heart", "shoal", "star"],
@@ -506,7 +506,7 @@ class Level:
             return ch
         if len(self._chunks) > 7:
             del self._chunks[max(self._chunks, key=lambda k: abs(k - ci))]
-        surf = pygame.Surface((CHUNK * TILE, self.h * TILE + PAD), pygame.SRCALPHA)
+        surf = hsurf(CHUNK * TILE, self.h * TILE + PAD)
         sky = gfx.sky(self.theme)
         sh = sky.get_height()
         solid = self.solid
@@ -544,7 +544,7 @@ class Level:
                     haz.append((tx * TILE - 1, ty * TILE - 1, hang))
         # everything baked in is fully opaque or fully clear, so the strip can use a colour key,
         # which is much faster to draw than per-pixel transparency
-        fast = pygame.Surface(surf.get_size())
+        fast = hsurf(*surf.get_size(), alpha=False)
         fast.fill(KEY)
         fast.blit(surf, (0, 0))
         fast.set_colorkey(KEY, pygame.RLEACCEL)
@@ -605,7 +605,7 @@ def plant_frame(theme, kind, n, fr):
         pc = gfx.THEMES[theme]["plant"]
         pd = gfx.sh(pc, -55)
         w, hgt = 96, n * 13 + 12
-        im = pygame.Surface((w, hgt), pygame.SRCALPHA)
+        im = hsurf(w, hgt)
         x0, y0, ph = w // 2, hgt, fr / PLANT_FRAMES * math.tau
         for blade in range(1 if kind == 0 else 3):
             seg = 13 - blade * 3
@@ -614,13 +614,13 @@ def plant_frame(theme, kind, n, fr):
                 sway = math.sin(ph + k * 0.55 + blade) * k * 1.7
                 pts.append((x0 + (blade - 1) * (5 + k * 1.5) * (kind > 0) + sway, y0 - k * seg))
             if len(pts) > 1:
-                pygame.draw.lines(im, pd, False, pts, 6 if kind == 0 else 4)
-                pygame.draw.lines(im, pc, False, pts, 3 if kind == 0 else 2)
+                dr.lines(im, pd, False, pts, 6 if kind == 0 else 4)
+                dr.lines(im, pc, False, pts, 3 if kind == 0 else 2)
                 if kind == 0:
                     for k in range(1, len(pts) - 1, 2):
                         px, py = pts[k]
-                        pygame.draw.ellipse(im, pc, (px - (11 if k % 4 == 1 else -1), py - 4, 11, 6))
+                        dr.ellipse(im, pc, (px - (11 if k % 4 == 1 else -1), py - 4, 11, 6))
                 if kind == 2:
-                    pygame.draw.circle(im, gfx.sh(pc, 60), pts[-1], 3)
+                    dr.circle(im, gfx.sh(pc, 60), pts[-1], 3)
         _plants[key] = im
     return im

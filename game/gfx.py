@@ -3,36 +3,76 @@
 import math
 import random
 import pygame
-from core import W, H, TILE
+import core
+from core import W, H, TILE, hsurf, adopt, scaled, dr
 
-PD = pygame.draw
+PD = dr            # draws in points on Hi surfaces, in pixels on plain ones
 A = pygame.SRCALPHA
-SS = 3  # sprites are drawn 3x too large, then smoothly scaled down (anti-aliasing)
+# Sprites are drawn SS pixels per point on a work surface, then smoothly scaled down to the
+# render scale core.K (anti-aliasing). set_scale() picks SS; zoom() enlarges one drawing.
+SS = 3
+_SS0 = 3
+
+
+def set_scale(k):
+    """Called once, before anything is drawn: k pixels per point for every cached image."""
+    global SS, _SS0
+    core.K = k
+    _SS0 = SS = 3 * k if k > 1 else 4
+    _cache.clear()
+    core._panels.clear()
+
+
+class zoom:
+    """with zoom(2): ... draws the next sprite twice as large (in points), at full sharpness."""
+    def __init__(self, z):
+        self.z = z
+
+    def __enter__(self):
+        global SS
+        SS = _SS0 * self.z
+
+    def __exit__(self, *a):
+        global SS
+        SS = _SS0
 
 
 def _w(w):
     return 0 if not w else max(1, int(round(w * SS)))
 
 
+def _blended(fn):
+    """Translucent colours are blended onto the drawing instead of punching a see-through
+    hole in it (pygame.draw replaces pixels, alpha included)."""
+    def draw(s, c, *a, **kw):
+        if len(c) == 4 and c[3] < 255:
+            t = pygame.Surface(s.get_size(), A)
+            fn(t, c, *a, **kw)
+            s.blit(t, (0, 0))
+        else:
+            fn(s, c, *a, **kw)
+    return staticmethod(draw)
+
+
 class D:
     """pygame.draw look-alike that scales every coordinate by SS."""
-    @staticmethod
+    @_blended
     def polygon(s, c, pts, width=0):
         PD.polygon(s, c, [(x * SS, y * SS) for x, y in pts], _w(width))
 
-    @staticmethod
+    @_blended
     def ellipse(s, c, r, width=0):
         PD.ellipse(s, c, [int(v * SS) for v in r], _w(width))
 
-    @staticmethod
+    @_blended
     def circle(s, c, p, r, width=0):
         PD.circle(s, c, (p[0] * SS, p[1] * SS), r * SS, _w(width))
 
-    @staticmethod
+    @_blended
     def line(s, c, a, b, width=1):
         PD.line(s, c, (a[0] * SS, a[1] * SS), (b[0] * SS, b[1] * SS), _w(width))
 
-    @staticmethod
+    @_blended
     def lines(s, c, closed, pts, width=1):
         pts = [(x * SS, y * SS) for x, y in pts]
         PD.lines(s, c, closed, pts, _w(width))
@@ -40,18 +80,19 @@ class D:
             for p in pts:
                 PD.circle(s, c, p, _w(width) / 2)
 
-    @staticmethod
+    @_blended
     def rect(s, c, r, width=0, border_radius=0):
         PD.rect(s, c, [int(v * SS) for v in r], _w(width), border_radius=int(border_radius * SS))
 
-    @staticmethod
+    @_blended
     def arc(s, c, r, a0, a1, width=1):
         PD.arc(s, c, [int(v * SS) for v in r], a0, a1, _w(width))
 
 
-def put(s, im, pos):
-    """Blit an already finished (1x) image onto a 3x work surface."""
-    s.blit(pygame.transform.smoothscale(im, (im.get_width() * SS, im.get_height() * SS)), (pos[0] * SS, pos[1] * SS))
+def put(s, im, pos, size=None):
+    """Draw a finished image (Hi, in points) onto a work surface, optionally resized to size points."""
+    w, h = size or im.get_size()
+    s.blit(pygame.transform.smoothscale(im, (max(1, round(w * SS)), max(1, round(h * SS)))), (round(pos[0] * SS), round(pos[1] * SS)))
 
 
 def _grad(w, h):
@@ -65,20 +106,35 @@ def _grad(w, h):
     return _cache[key]
 
 
-def fin(s, outline=True, shade=True):
-    """Scale a 3x work surface down, add soft shading and a dark outline."""
-    w, h = max(1, s.get_width() // SS), max(1, s.get_height() // SS)
-    im = pygame.transform.smoothscale(s, (w, h))
+INK = (16, 26, 44)
+_RING = [(math.cos(a * math.tau / 24), math.sin(a * math.tau / 24)) for a in range(24)]
+
+
+def fin(s, outline=True, shade=True, k=None):
+    """Finish a work surface (SS pixels per point): soft shading, a dark outline one point
+    wide, then a smooth reduction to k pixels per point. Returns a Hi surface."""
+    k = core.K if k is None else k
+    rw, rh = s.get_size()
     if shade:
-        im.blit(_grad(w, h), (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+        s.blit(_grad(rw, rh), (0, 0), special_flags=pygame.BLEND_RGB_MULT)
     if outline:
-        sil = pygame.mask.from_surface(im, 110).to_surface(setcolor=(16, 26, 44, 255), unsetcolor=(0, 0, 0, 0))
-        out = pygame.Surface((w + 2, h + 2), A)
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)):
-            out.blit(sil, (1 + dx, 1 + dy))
-        out.blit(im, (1, 1))
-        im = out
-    return im
+        # the outline is grown around the silhouette at full work resolution, so it comes
+        # out anti-aliased instead of as a staircase of whole pixels
+        p = int(round(SS))
+        sil = pygame.mask.from_surface(s, 110).to_surface(setcolor=INK + (255,), unsetcolor=(0, 0, 0, 0))
+        out = pygame.Surface((rw + 2 * p, rh + 2 * p), A)
+        for r in (p, p * 0.6, p * 0.3):
+            for cx, cy in _RING:
+                out.blit(sil, (p + round(cx * r), p + round(cy * r)), special_flags=pygame.BLEND_RGBA_MAX)
+        out.blit(s, (p, p))
+        s, rw, rh = out, rw + 2 * p, rh + 2 * p
+    w, h = max(1, round(rw * k / _SS0)), max(1, round(rh * k / _SS0))     # zoom() enlarges
+    return adopt(pygame.transform.smoothscale(s, (w, h)), k)
+
+
+def mirror(im, fx=True, fy=False):
+    """pygame.transform.flip for Hi surfaces."""
+    return adopt(pygame.transform.flip(im, fx, fy), im.k)
 
 
 THEMES = {
@@ -454,37 +510,131 @@ def spr(k, f=0, flip=False):
     if s is None:
         s = fin(_make(k, f), k not in ("vortex", "danionella"))
         if flip:
-            s = pygame.transform.flip(s, True, False)
+            s = mirror(s)
         _cache[key] = s
     return s
 
 
 # ---------------------------------------------------------------- player
+ZF_PAL = {
+    "": dict(back=(112, 104, 72), base=(228, 212, 158), stripe=(36, 56, 140), belly=(246, 244, 232),
+             fin=(244, 226, 160), fstripe=(48, 70, 150), iris=(222, 180, 74)),
+    "star": dict(back=(36, 140, 70), base=(160, 255, 140), stripe=(18, 128, 64), belly=(222, 255, 210),
+                 fin=(190, 255, 170), fstripe=(30, 150, 76), iris=(255, 250, 140)),
+    "gold": dict(back=(196, 144, 44), base=(255, 226, 120), stripe=(214, 162, 54), belly=(255, 246, 206),
+                 fin=(255, 232, 150), fstripe=(206, 152, 48), iris=(255, 206, 90)),
+}
+
+
+def _clip(layer, mask):
+    """Keep only the part of layer that lies inside mask (both work surfaces)."""
+    layer.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    return layer
+
+
+def _zebrafish(w, h, f=0, pal=None):
+    """A zebrafish facing right, w x h points: tapered body, blue stripes that follow the body
+    and run on into the tail and anal fin, fin rays, gill cover and a gold-ringed eye."""
+    p = ZF_PAL[""] if pal is None else pal
+    s = surf(w, h)
+    cy = h * 0.5
+    x0, x1 = w * 0.26, w * 0.985            # caudal peduncle .. snout
+    L, T = x1 - x0, h * 0.31                 # body length, greatest half-depth
+    flex = (f * 2 - 1) * h * 0.06            # tail beat
+
+    def half(u):                             # slim peduncle, deepest mid-body, rounded snout
+        if u < 0.5:
+            return T * (0.32 + 0.68 * math.sin(math.pi * u) ** 0.9)
+        return T * math.sqrt(max(0.0, 1 - ((u - 0.5) / 0.5) ** 2.2)) ** 0.9
+
+    us = [i / 28 for i in range(29)]
+    top = [(x0 + u * L, cy - half(u) * 0.92) for u in us]
+    bot = [(x0 + u * L, cy + half(u) * 1.08) for u in us]
+    body = top + bot[::-1]
+
+    def at(u, o):                            # a point on the flank: o = -1 back edge, +1 belly edge
+        return x0 + u * L, cy + o * half(u) * (0.92 if o < 0 else 1.08)
+
+    # fins first, so the body overlaps their roots
+    fins = surf(w, h)
+    tail = [(x0 + w * 0.03, cy - T * 0.3), (w * 0.03, cy - h * 0.40 + flex), (w * 0.07, cy - h * 0.34 + flex),
+            (x0 - w * 0.11, cy + flex * 0.6), (w * 0.07, cy + h * 0.34 + flex), (w * 0.03, cy + h * 0.40 + flex),
+            (x0 + w * 0.03, cy + T * 0.3)]
+    ua, ub = 0.40, 0.60
+    dorsal = [at(ua, -0.9), (at(ua, -1)[0] - w * 0.05, cy - h * 0.47), (at(ub, -1)[0] - w * 0.09, cy - h * 0.43), at(ub, -0.9)]
+    ua, ub = 0.16, 0.50
+    anal = [at(ua, 0.9), (at(ua, 1)[0] - w * 0.05, cy + h * 0.44), (at(ub, 1)[0] - w * 0.07, cy + h * 0.45), at(ub, 0.9)]
+    for poly in (tail, dorsal, anal):
+        D.polygon(fins, p["fin"], poly)
+    rays = surf(w, h)                        # rays and stripes, kept inside the fins
+    ray = tuple(max(0, c - 60) for c in p["fin"]) + (150,)
+    for k in (-3, -1, 1, 3):
+        D.line(rays, ray, (x0, cy + k * T * 0.07), (0, cy + k * h * 0.13 + flex), 0.3)
+    for k in (-1, 1):                        # tail stripes, continuing the body stripes
+        for o in (0.18, 0.42):
+            D.line(rays, p["fstripe"], (x0, cy + k * o * T), (0, cy + k * (o * 2.2) * h * 0.3 + flex), 0.9)
+    for o in (0.33, 0.66):                   # anal fin bands
+        D.line(rays, p["fstripe"], (anal[0][0] + (anal[1][0] - anal[0][0]) * o, anal[0][1] + (anal[1][1] - anal[0][1]) * o),
+               (anal[3][0] + (anal[2][0] - anal[3][0]) * o, anal[3][1] + (anal[2][1] - anal[3][1]) * o), 0.9)
+    for k in range(4):
+        q = ua + (ub - ua) * (k + 0.5) / 4
+        D.line(rays, ray, at(q, 1), (at(q, 1)[0] - w * 0.05, cy + h * 0.45), 0.3)
+    fins.blit(_clip(rays, fins.copy()), (0, 0))
+    s.blit(fins, (0, 0))
+
+    # body: gold-silver ground, olive back, blue stripes, pale belly
+    D.polygon(s, p["base"], body)
+    det = surf(w, h)
+    D.polygon(det, p["back"] + (190,), [at(u, -1.2) for u in us] + [at(u, -0.64) for u in us[::-1]])
+    for i, o in enumerate((-0.44, 0.0, 0.44)):          # bold blue stripes, gold between them
+        end = 0.78 - 0.06 * abs(i - 1)
+        su = [u for u in us if u <= end] + [end]
+        wd = 0.14
+        band = ([at(u, o - wd * (1 - 0.6 * (u / end) ** 6)) for u in su] +
+                [at(u, o + wd * (1 - 0.6 * (u / end) ** 6)) for u in su[::-1]])
+        D.polygon(det, p["stripe"], band)
+    D.polygon(det, p["stripe"], [at(u, 0.72) for u in us if 0.12 < u < 0.62] + [at(u, 0.84) for u in us[::-1] if 0.12 < u < 0.62])
+    D.polygon(det, p["belly"], [at(u, 0.86) for u in us if u > 0.3] + [at(u, 1.2) for u in us[::-1] if u > 0.3])
+    D.polygon(det, (255, 255, 255, 80), [at(u, -0.86) for u in us if 0.2 < u < 0.85] + [at(u, -0.66) for u in us[::-1] if 0.2 < u < 0.85])
+    gx = at(0.80, 0)[0]
+    D.arc(det, tuple(max(0, c - 60) for c in p["base"]), (gx - h * 0.2, cy - T * 0.75, h * 0.3, T * 1.5), -1.25, 1.25, 0.5)
+    mask = surf(w, h)
+    D.polygon(mask, (255, 255, 255), body)
+    s.blit(_clip(det, mask), (0, 0))
+
+    # pectoral fin, eye, mouth
+    px, py = at(0.74, 0.35)
+    D.polygon(s, p["fin"] + (230,), [(px, py), (px - w * 0.11, py + h * (0.16 + 0.04 * f)), (px - w * 0.05, py - h * 0.02)])
+    ex, ey = at(0.86, -0.22)
+    r = max(1.3, h * 0.14)
+    D.circle(s, p["iris"], (ex, ey), r)
+    D.circle(s, (14, 16, 26), (ex + r * 0.12, ey), r * 0.62)
+    D.circle(s, (255, 255, 255), (ex - r * 0.08, ey - r * 0.32), r * 0.24)
+    D.line(s, tuple(max(0, c - 110) for c in p["base"]), at(0.95, 0.30), at(0.99, 0.12), 0.45)
+    return s
+
+
 def _player(variant, f):
-    body, stripe = (232, 226, 200), (38, 52, 130)
-    if variant == "star":
-        body, stripe = (130, 255, 120), (20, 150, 60)
-    elif variant == "gold":
-        body, stripe = (255, 225, 110), (220, 170, 60)
-    s = _fish(40, 20, body, (250, 248, 235), (240, 205, 95), stripe, 4, f, sw=1.5)
-    D.ellipse(s, (255, 255, 255, 70), (16, 4.5, 16, 3))
+    s = _zebrafish(40, 20, f, ZF_PAL.get(variant, ZF_PAL[""]))
     if variant == "crispr":
         D.circle(s, (90, 255, 255), (30, 4), 3)
         D.line(s, (90, 255, 255), (24, 2), (36, 6), 1)
     return s
 
 
-def player(variant, f, ang, flip):
-    key = ("P", variant, f, ang, flip)
+def player(variant, f, ang, flip, z=1, upside_down=False):
+    key = ("P", variant, f, ang, flip, z, upside_down)
     s = _cache.get(key)
     if s is None:
-        s = fin(_player(variant, f))
+        with zoom(z):
+            s = fin(_player(variant, f))
+        if flip or upside_down:
+            s = mirror(s, flip, upside_down)
+        if ang:
+            k = s.k
+            s = adopt(pygame.transform.rotozoom(s, ang * 15, 1), k)     # rotozoom is smooth
         if variant == "casper":
             s.set_alpha(110)
-        if flip:
-            s = pygame.transform.flip(s, True, False)
-        if ang:
-            s = pygame.transform.rotate(s, ang * 15)
         _cache[key] = s
     return s
 
@@ -492,22 +642,89 @@ def player(variant, f, ang, flip):
 def buddy(f, flip):
     key = ("B", f, flip)
     if key not in _cache:
-        s = fin(_fish(26, 13, (225, 220, 195), None, (235, 200, 100), (38, 52, 130), 3, f, sw=1.3))
-        _cache[key] = pygame.transform.flip(s, True, False) if flip else s
+        s = fin(_zebrafish(26, 13, f))
+        _cache[key] = mirror(s) if flip else s
     return _cache[key]
 
 
 # ---------------------------------------------------------------- icons
+def letter(s, ch, center, size, col, bold=True):
+    """Draw one character on a work surface, centred on its own ink (not on the line box),
+    so narrow letters such as I sit in the middle like the others."""
+    t = core.font(max(4, round(size * SS)), bold).render(ch, True, col)
+    bb = t.get_bounding_rect()
+    s.blit(t, (round(center[0] * SS - bb.centerx), round(center[1] * SS - bb.centery)))
+
+
+def coin(ch, lit=True, d=30):
+    """A D-A-N-I-O letter coin, d points across."""
+    key = ("COIN", ch, lit, d)
+    if key not in _cache:
+        r = d / 2
+        s = surf(d, d)
+        face, rim, ink = ((255, 205, 60), (156, 96, 24), (96, 46, 10)) if lit else ((62, 72, 96), (40, 48, 68), (128, 142, 170))
+        D.circle(s, rim, (r, r), r)
+        D.circle(s, face, (r, r), r - max(1.5, d * 0.07))
+        if lit:
+            D.arc(s, (255, 240, 170), (r * 0.36, r * 0.36, r * 1.28, r * 1.28), 1.9, 3.0, max(1, d * 0.05))
+        letter(s, ch, (r, r), d * 0.62, ink)
+        _cache[key] = fin(s, False, lit)
+    return _cache[key]
+
+
+def _centred(s):
+    """Move a drawing so its visible part sits exactly in the middle of the surface."""
+    bb = s.get_bounding_rect(min_alpha=40)
+    out = pygame.Surface(s.get_size(), A)
+    out.blit(s, (s.get_width() // 2 - bb.centerx, s.get_height() // 2 - bb.centery))
+    return out
+
+
+def _heart(s, c, w, h, lit=True):
+    """A shaded heart w x h points, centred on c."""
+    pts = []
+    for i in range(72):
+        t = i / 72 * math.tau
+        x, y = 16 * math.sin(t) ** 3, 13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)
+        pts.append((c[0] + x / 32 * w, c[1] - (y + 2.5) / 29.5 * h))
+    base = (226, 50, 74) if lit else (62, 64, 86)
+    D.polygon(s, base, pts)
+    det = surf(s.get_width() / SS, s.get_height() / SS)
+    top, n = c[1] - h * 0.5, 24
+    for i in range(n):                          # darker towards the point
+        D.rect(det, (60, 0, 20, int(150 * (i / n) ** 1.6)), (c[0] - w, top + h * i / n, w * 2, h / n + 0.2))
+    if lit:
+        D.ellipse(det, (255, 130, 150), (c[0] - w * 0.42, c[1] - h * 0.42, w * 0.34, h * 0.30))
+        D.circle(det, (255, 228, 234), (c[0] - w * 0.27, c[1] - h * 0.27), w * 0.08)
+    mask = surf(s.get_width() / SS, s.get_height() / SS)
+    D.polygon(mask, (255, 255, 255), pts)
+    s.blit(_clip(det, mask), (0, 0))
+
+
+def _scissors(s):
+    """CRISPR scissors, 24 x 24 points: steel blades, red finger rings, a pivot screw."""
+    steel, edge, shine = (206, 216, 230), (112, 124, 146), (248, 250, 255)
+    for sy in (-1, 1):
+        tip = (23, 12 - sy * 4.2)
+        piv = (11.5, 12)
+        ring = (5, 12 + sy * 6)
+        D.polygon(s, steel, [(piv[0] - 1, piv[1] + sy * 1.6), (piv[0] + 1.5, piv[1] - sy * 1.7), tip, (piv[0] + 3, piv[1] + sy * 0.9)])
+        D.line(s, edge, (piv[0] + 1, piv[1] + sy * 0.2), tip, 0.5)
+        D.line(s, shine, (piv[0] + 1.8, piv[1] - sy * 1.1), (tip[0] - 3, tip[1] + sy * 0.8), 0.45)
+        D.line(s, steel, piv, (ring[0] + 2.2, ring[1] - sy * 2.2), 2.4)
+        D.circle(s, (214, 54, 66), ring, 4.3, 2.0)
+        D.arc(s, (255, 150, 150), (ring[0] - 3.4, ring[1] - 3.4, 6.8, 6.8), 1.6, 2.9, 0.7)
+    D.circle(s, (90, 100, 120), (11.5, 12), 1.5)
+    D.circle(s, (230, 236, 246), (11.2, 11.6), 0.55)
+
+
 def icon(k, f=0):
     key = ("I", k, f)
     if key in _cache:
         return _cache[key]
     if k in ("heart", "heart0"):
         s = surf(22, 20)
-        c = (235, 60, 80) if k == "heart" else (60, 60, 80)
-        D.circle(s, c, (6, 7), 6); D.circle(s, c, (15, 7), 6); D.polygon(s, c, [(0, 9), (21, 9), (11, 20)])
-        if k == "heart":
-            D.circle(s, (255, 170, 180), (5, 5), 2)
+        _heart(s, (11, 10), 22, 20, k == "heart")
     elif k == "food":
         s = surf(16, 16)
         D.ellipse(s, (255, 150, 60), (2, 4 + f, 12, 8)); D.line(s, (255, 200, 120), (3, 8 + f), (0, 3 + f), 2); D.line(s, (255, 200, 120), (13, 8 + f), (16, 3 + f), 2)
@@ -538,15 +755,17 @@ def icon(k, f=0):
         s = surf(24, 24)
         n = k[3:]
         if n == "heart":
-            put(s, icon("heart"), (1, 2))
+            _heart(s, (12, 12), 21, 19)
         elif n == "shoal":
-            put(s, buddy(0, False), (-2, 0)); put(s, buddy(1, False), (1, 10))
+            for (x, y), f in (((0, 1), 0), ((4, 12), 1)):        # two shoal-mates
+                s.blit(_zebrafish(20, 10, f), (round(x * SS), round(y * SS)))
         elif n == "star":
             D.circle(s, (120, 255, 110), (12, 12), 10); D.circle(s, (220, 255, 210), (9, 9), 4)
         elif n == "casper":
             D.ellipse(s, (255, 255, 255, 170), (3, 2, 18, 20)); D.circle(s, (30, 30, 60), (9, 10), 2); D.circle(s, (30, 30, 60), (15, 10), 2)
         else:
-            put(s, pygame.transform.smoothscale(spr("scissors"), (22, 22)), (1, 1))
+            _scissors(s)
+        s = _centred(s)
     else:
         s = surf(8, 8)
     s = fin(s, k not in ("goal", "bubble"), k not in ("goal", "bubble", "page", "page0"))
@@ -581,7 +800,7 @@ def ground_tex(theme):
         return _cache[key]
     g = THEMES[theme]["g"]
     rnd = random.Random(theme * 13 + 1)
-    s = pygame.Surface((TS, TS))
+    s = hsurf(TS, TS, False)
     s.fill(g)
     kind = _kind(theme)
 
@@ -625,9 +844,8 @@ def ground_tex(theme):
                     PD.lines(s, (0, 96, 112), False, q, 2)
                     PD.circle(s, (0, 190, 176), q[0], 3)
                     PD.circle(s, (0, 190, 176), q[-1], 3, 1)
-        f = pygame.font.Font(None, 15)
         for _ in range(26):
-            s.blit(f.render(rnd.choice("ACGT"), True, (58, 84, 150)), (rnd.randint(4, TS - 12), rnd.randint(4, TS - 12)))
+            core.draw_text(s, rnd.choice("ACGT"), (rnd.randint(4, TS - 12), rnd.randint(4, TS - 12)), 11, (58, 84, 150), bold=True, shadow=False)
     else:
         for _ in range(260):
             x, y, ln = rnd.randint(0, TS), rnd.randint(0, TS), rnd.randint(8, 40)
@@ -658,7 +876,7 @@ def tile(theme, tx, ty, mask):
         return s
     th = THEMES[theme]
     g, gt = th["g"], th["gt"]
-    s = pygame.Surface((TILE, TILE), A)
+    s = hsurf(TILE, TILE)
     s.blit(ground_tex(theme), (0, 0), (u * TILE, v * TILE, TILE, TILE))
     dark = sh(g, -62 if theme != 2 else -95)
     if mask & 4:
@@ -680,13 +898,13 @@ def tile(theme, tx, ty, mask):
                 x = rnd.randint(1, 29)
                 PD.line(s, sh(gt, -34), (x, 4), (x + 1, 8))
         elif kind == "gravel":
-            hl = pygame.Surface((32, 7), A)
+            hl = hsurf(32, 7)
             hl.fill((255, 250, 235, 70))
             s.blit(hl, (0, 0))
             PD.line(s, sh(gt, 15), (0, 0), (32, 0), 2)
         elif kind == "circuit":
             for i in range(9):
-                gl = pygame.Surface((32, 1), A)
+                gl = hsurf(32, 1)
                 gl.fill(gt + (150 - i * 16,))
                 s.blit(gl, (0, 3 + i))
             PD.rect(s, gt, (0, 0, 32, 3))
@@ -696,23 +914,24 @@ def tile(theme, tx, ty, mask):
             PD.line(s, sh(gt, 28), (0, 0), (32, 0), 2)
             PD.line(s, sh(g, -45), (0, 6), (32, 6), 2)
     if mask & 16:
-        ov = pygame.Surface((TILE, TILE), A)
+        ov = hsurf(TILE, TILE)
         ov.fill((0, 0, 12, 58))
         s.blit(ov, (0, 0))
-    R = 6
-    for cx, cy, need in ((0, 0, 9), (31, 0, 3), (0, 31, 12), (31, 31, 6)):
+    n = pygame.Surface.get_width(s)          # rounded outer corners, cut at full resolution
+    R = 6 * s.k
+    for cx, cy, need in ((0, 0, 9), (n - 1, 0, 3), (0, n - 1, 12), (n - 1, n - 1, 6)):
         if mask & need == need:
             for i in range(R):
                 for j in range(R):
                     if (R - i - 0.5) ** 2 + (R - j - 0.5) ** 2 > R * R:
-                        s.set_at((cx + (i if cx == 0 else -i), cy + (j if cy == 0 else -j)), (0, 0, 0, 0))
+                        pygame.Surface.set_at(s, (cx + (i if cx == 0 else -i), cy + (j if cy == 0 else -j)), (0, 0, 0, 0))
     _cache[key] = s
     return s
 
 
 def crack():
     if "CRK" not in _cache:
-        s = pygame.Surface((TILE, TILE), A)
+        s = hsurf(TILE, TILE)
         s.fill((255, 240, 200, 46))
         for pts in ([(3, 5), (11, 12), (8, 19), (16, 25), (14, 30)], [(11, 12), (20, 9), (28, 14)], [(16, 25), (24, 22), (30, 27)], [(20, 9), (22, 2)]):
             PD.lines(s, (20, 14, 10, 230), False, pts, 2)
@@ -726,7 +945,7 @@ def tuft(theme, v):
     key = ("TUFT", theme, v)
     if key not in _cache:
         rnd = random.Random(theme * 9 + v)
-        s = pygame.Surface((TILE, 10), A)
+        s = hsurf(TILE, 10)
         gt = THEMES[theme]["gt"]
         if theme == 1:
             for i in range(9):
@@ -759,7 +978,7 @@ def lily(v):
 def glass(mask):
     key = ("GL", mask)
     if key not in _cache:
-        s = pygame.Surface((TILE, TILE), A)
+        s = hsurf(TILE, TILE)
         s.fill((196, 236, 250, 74))
         for i in range(-32, 32, 13):
             PD.line(s, (255, 255, 255, 60), (i, 32), (i + 32, 0), 4)
@@ -790,7 +1009,7 @@ def hazard(theme, f, flipped=False):
             D.lines(s, c, False, [(16, 28), (mx, my), (ex, ey)], 3)
             D.circle(s, (255, 244, 205), (ex, ey), 2)
         im = fin(s, True, False)
-        _cache[key] = pygame.transform.flip(im, False, True) if flipped else im
+        _cache[key] = mirror(im, False, True) if flipped else im
     return _cache[key]
 
 
@@ -799,7 +1018,7 @@ def background(theme):
     if key in _cache:
         return _cache[key]
     th = THEMES[theme]
-    s = pygame.Surface((W, H))
+    s = hsurf(W, H, False)
     for y in range(H):
         t = (y / H) ** 0.8
         s.fill(mix(th["wt"], th["wb"], t), (0, y, W, 1))
@@ -814,7 +1033,7 @@ def parallax(theme):
         return _cache[key]
     th = THEMES[theme]
     PW = 1920
-    s = pygame.Surface((PW, H), A)
+    s = hsurf(PW, H)
     rnd = random.Random(theme * 5 + 2)
     c1 = mix(th["wt"], th["wb"], 0.5) + (120,)
     c2 = mix(th["wt"], th["wb"], 0.8) + (150,)
@@ -879,29 +1098,51 @@ def parallax(theme):
 def rays():
     if "RAYS" not in _cache:
         rnd = random.Random(4)
-        q = pygame.Surface((W // 4 + 120, H // 4), A)
+        z = 2           # drawn at half the final size (it was a quarter: the edges showed steps)
+        q = pygame.Surface(((W // 4 + 120) * z, H // 4 * z), A)
         for _ in range(9):
             x, wd = rnd.randint(0, W // 4 + 100), rnd.randint(6, 22)
-            PD.polygon(q, (255, 255, 240, rnd.randint(12, 26)), [(x, 0), (x + wd, 0), (x + wd - 44, H // 4), (x - 66, H // 4)])
-        _cache["RAYS"] = pygame.transform.smoothscale(q, ((W // 4 + 120) * 4, H))
+            pts = [(x, 0), (x + wd, 0), (x + wd - 44, H // 4), (x - 66, H // 4)]
+            pygame.draw.polygon(q, (255, 255, 240, rnd.randint(12, 26)), [(px * z, py * z) for px, py in pts])
+        _cache["RAYS"] = scaled(q, ((W // 4 + 120) * 4, H))
     return _cache["RAYS"]
 
 
 def vignette():
+    """Darker screen edges, as an opaque layer to multiply with, plus the strips of the screen
+    it actually darkens (its middle is plain white, so that part is never drawn)."""
     if "VIG" not in _cache:
-        q = pygame.Surface((96, 54), A)
+        q = pygame.Surface((96, 54))
+        clear = set()
         for y in range(54):
             for x in range(96):
-                d = math.hypot((x - 47.5) / 48, (y - 26.5) / 27)
-                q.set_at((x, y), (0, 8, 26, clampc((d - 0.72) * 210)))
-        _cache["VIG"] = pygame.transform.smoothscale(q, (W, H))
+                a = clampc((math.hypot((x - 47.5) / 48, (y - 26.5) / 27) - 0.72) * 210)
+                q.set_at((x, y), tuple(255 - a * (255 - c) // 255 for c in (0, 8, 26)))
+                if a == 0:
+                    clear.add((x, y))
+        best = (0, 48, 27)
+        for mx in range(1, 48):
+            for my in range(1, 27):
+                if (96 - 2 * mx) * (54 - 2 * my) > best[0] and all(
+                        (x, y) in clear for x in range(mx - 1, 97 - mx) for y in (my - 1, 54 - my)) and all(
+                        (x, y) in clear for y in range(my - 1, 55 - my) for x in (mx - 1, 96 - mx)):
+                    best = ((96 - 2 * mx) * (54 - 2 * my), mx, my)
+        mx, my = best[1] * 10, best[2] * 10
+        strips = [(0, 0, W, my), (0, H - my, W, my), (0, my, mx, H - 2 * my), (W - mx, my, mx, H - 2 * my)]
+        _cache["VIG"] = (scaled(q, (W, H)), strips)
     return _cache["VIG"]
+
+
+def draw_vignette(s):
+    v, strips = vignette()
+    for r in strips:
+        s.blit(v, r[:2], r, special_flags=pygame.BLEND_RGB_MULT)
 
 
 def surface_strip(f):
     key = ("WS", f)
     if key not in _cache:
-        s = pygame.Surface((TILE, 12), A)
+        s = hsurf(TILE, 12)
         for x in range(TILE):
             y = 2 + math.sin((x / TILE + f / 4) * math.tau) * 1.5
             PD.line(s, (255, 255, 255, 60), (x, y + 2), (x, 11))
@@ -922,13 +1163,13 @@ def sky(theme):
     th = THEMES[theme]
     c = th["sky"]
     SKY_H = 760 if theme == 7 else 200
-    s = pygame.Surface((W, SKY_H))
+    s = hsurf(W, SKY_H, False)
     rnd = random.Random(theme + 50)
     if theme == 1:
         for y in range(SKY_H):
             s.fill(mix((250, 150, 96), (255, 226, 170), y / SKY_H), (0, y, W, 1))
         for r, a in ((70, 40), (54, 70), (40, 255)):
-            g = pygame.Surface((r * 2, r * 2), A)
+            g = hsurf(r * 2, r * 2)
             PD.circle(g, (255, 244, 206, a), (r, r), r)
             s.blit(g, (700 - r, 74 - r))
         pts = [(x, 150 + math.sin(x / W * math.tau * 3) * 14 + math.sin(x / W * math.tau * 7) * 6) for x in range(0, W + 1, 12)]
@@ -966,7 +1207,7 @@ def sky(theme):
                     PD.rect(s, sh(col, -40), (x - 6, 84, 12, 8))
         elif theme == 4:
             for x in range(40, W, 320):
-                g = pygame.Surface((240, 40), A)
+                g = hsurf(240, 40)
                 PD.ellipse(g, (255, 255, 255, 70), (0, 0, 240, 40))
                 s.blit(g, (x - 10, 14))
                 PD.rect(s, (255, 255, 255), (x, 26, 220, 10), border_radius=5)
@@ -992,7 +1233,7 @@ def sky(theme):
                 PD.circle(s, (0, 150, 150), (rnd.randrange(0, W, 40), rnd.randrange(0, SKY_H, 40)), 3)
         else:
             for _ in range(6):
-                g = pygame.Surface((300, 160), A)
+                g = hsurf(300, 160)
                 PD.ellipse(g, (rnd.randint(40, 110), 40, rnd.randint(90, 160), 22), (0, 0, 300, 160))
                 s.blit(g, (rnd.randint(-100, W - 200), rnd.randint(-60, 60)))
             PD.circle(s, (60, 130, 220), (480, SKY_H + 1250), 1320)
@@ -1000,11 +1241,11 @@ def sky(theme):
         for _ in range(170 if theme == 5 else 520):
             PD.circle(s, (255, 255, 255), (rnd.randint(0, W), rnd.randint(0, SKY_H - 44)), rnd.choice((1, 1, 1, 2)))
     if theme != 7:      # 110 px of head-room above the level, for when the camera follows a leap
-        tall = pygame.Surface((W, SKY_H + SKY_TOP))
-        tall.blit(pygame.transform.scale(s.subsurface((0, 0, W, 1)), (W, SKY_TOP)), (0, 0))
+        tall = hsurf(W, SKY_H + SKY_TOP, False)
+        tall.blit(scaled(s.subsurface((0, 0, W, 1)), (W, SKY_TOP)), (0, 0))
         tall.blit(s, (0, SKY_TOP))
         s = tall
-    out = pygame.Surface((W * 2, s.get_height()))
+    out = hsurf(W * 2, s.get_height(), False)
     out.blit(s, (0, 0))
     out.blit(s, (W, 0))
     _cache[key] = out
@@ -1017,7 +1258,7 @@ def backdrop(theme):
     key = ("BACK", theme)
     if key not in _cache:
         far = parallax(theme)
-        s = pygame.Surface((far.get_width(), H))
+        s = hsurf(far.get_width(), H, False)
         for x in range(0, far.get_width(), W):
             s.blit(background(theme), (x, 0))
         s.blit(far, (0, 0))
@@ -1027,25 +1268,29 @@ def backdrop(theme):
     return _cache[key]
 
 
+def _radial(r, alpha, rgb=(0, 0, 12)):
+    """A smooth radial alpha gradient 2r points across: alpha(d) for d = distance / r."""
+    n = 64
+    q = pygame.Surface((n, n), A)
+    for y in range(n):
+        for x in range(n):
+            d = math.hypot(x - n / 2 + 0.5, y - n / 2 + 0.5) / (n / 2)
+            q.set_at((x, y), rgb + (clampc(alpha(d)),))
+    return scaled(q, (r * 2, r * 2))
+
+
 def dark_hole(r):
     """Darkness with a soft see-through hole, for dark levels in the browser."""
     key = ("HOLE", r)
     if key not in _cache:
-        s = pygame.Surface((r * 2, r * 2), A)
-        s.fill((0, 0, 12, 255))
-        for i in range(r, 0, -4):
-            PD.circle(s, (0, 0, 12, int(255 * (i / r) ** 2.2)), (r, r), i)
-        _cache[key] = s
+        _cache[key] = _radial(r, lambda d: 255 * min(1, d) ** 2.2)
     return _cache[key]
 
 
 def light_mask(r):
     key = ("L", r)
     if key not in _cache:
-        s = pygame.Surface((r * 2, r * 2), A)
-        for i in range(r, 0, -4):
-            PD.circle(s, (0, 0, 0, int(235 * (1 - (i / r) ** 2.2))), (r, r), i)
-        _cache[key] = s
+        _cache[key] = _radial(r, lambda d: 235 * (1 - d ** 2.2) if d < 1 else 0, (0, 0, 0))
     return _cache[key]
 
 
@@ -1074,7 +1319,7 @@ def ll(lon, lat):
 def world_map():
     if "MAP" in _cache:
         return _cache["MAP"]
-    s = pygame.Surface((MW, MH))
+    s = hsurf(MW, MH, False)
     for y in range(0, MH, 6):
         t = abs(y / MH - 0.45) * 2
         s.fill((int(40 - 20 * t), int(110 - 50 * t), int(170 - 50 * t)), (0, y, MW, 6))
@@ -1099,10 +1344,10 @@ def world_map():
         PD.polygon(s, (84, 166, 206), pts, 10)
         for p in pts:
             PD.circle(s, (84, 166, 206), p, 5)
-    land = pygame.Surface((MW, MH), A)
+    land = hsurf(MW, MH)
     for poly in LAND:
         PD.polygon(land, (255, 255, 255), [ll(*p) for p in poly])
-    tint = pygame.Surface((MW, MH))
+    tint = hsurf(MW, MH, False)
     rnd2 = random.Random(21)
     for y in range(0, MH, 4):
         lat = abs(90 - y / MH * 180)

@@ -131,9 +131,10 @@ def _seal(s, cx, cy, tier, k=0.72):
     pygame.draw.circle(s, light, (cx, cy), int(116 * k))
     pygame.draw.circle(s, dark, (cx, cy), int(116 * k), 4)
     pygame.draw.circle(s, dark, (cx, cy), int(102 * k), 2)
-    body = gfx.fin(gfx._fish(58, 29, (236, 230, 204), (250, 248, 235), (240, 205, 95), (38, 52, 130), 4, 0, sw=2.2))
-    body = pygame.transform.smoothscale(body, (int(body.get_width() * 2.2), int(body.get_height() * 2.2)))
-    s.blit(body, (cx - body.get_width() // 2, cy - body.get_height() // 2 - 12))
+    with gfx.zoom(2.2):             # drawn at full size, not enlarged afterwards
+        body = gfx.fin(gfx._zebrafish(58, 29), k=1)
+    bw, bh = pygame.Surface.get_size(body)
+    pygame.Surface.blit(s, body, (cx - bw // 2, cy - bh // 2 - 12))
     for i in range(tier + 1):
         sx = cx + (i - tier / 2) * 27
         sp = [(sx + math.sin(q * math.pi / 5) * (11 if q % 2 == 0 else 4.8), cy + 48 - math.cos(q * math.pi / 5) * (11 if q % 2 == 0 else 4.8)) for q in range(10)]

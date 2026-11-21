@@ -13,6 +13,9 @@ import math
 import os
 import random
 import sys
+
+# the stage is drawn at twice its size and SDL scales it to the window: smoothly, not in blocks
+os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "linear")
 import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,10 +24,11 @@ import gfx
 import audio
 import quiz
 import certificate
-from core import W, H, draw_text, draw_wrapped, panel, clamp, DIFF_NAMES
+from core import dr, hsurf, W, H, draw_text, draw_wrapped, panel, clamp, DIFF_NAMES
 from worlds import LEVELS, INDEX, WORLDS, ENDING
 from facts import FACTS, QUIZ, fact_id
 from play import Play
+import level as level_mod
 
 TOTAL_PAGES = sum(len(v) for w, v in FACTS.items() if w)
 UPGRADES = [
@@ -42,8 +46,8 @@ def fmt_time(sec):
 
 def star(s, x, y, r, col):
     pts = [(x + math.sin(i * math.pi / 5) * (r if i % 2 == 0 else r * 0.45), y - math.cos(i * math.pi / 5) * (r if i % 2 == 0 else r * 0.45)) for i in range(10)]
-    pygame.draw.polygon(s, col, pts)
-    pygame.draw.polygon(s, (20, 30, 50), pts, 1)
+    dr.polygon(s, col, pts)
+    dr.polygon(s, (20, 30, 50), pts, 1)
 
 
 _dims = {}
@@ -52,7 +56,7 @@ _dims = {}
 def dim(s, a=150):
     d = _dims.get(a)
     if d is None:
-        d = _dims[a] = pygame.Surface((W, H), pygame.SRCALPHA)
+        d = _dims[a] = hsurf(W, H)
         d.fill((4, 10, 24, a))
     s.blit(d, (0, 0))
 
@@ -83,12 +87,12 @@ class Menu:
         for k, (it, _) in enumerate(self.items):
             sel = k == self.i
             if sel:
-                bar = pygame.Surface((width, gap - 6), pygame.SRCALPHA)
-                pygame.draw.rect(bar, (255, 240, 150, 46), bar.get_rect(), border_radius=8)
-                pygame.draw.rect(bar, (255, 240, 150, 230), bar.get_rect(), 2, border_radius=8)
+                bar = hsurf(width, gap - 6)
+                dr.rect(bar, (255, 240, 150, 46), bar.get_rect(), border_radius=8)
+                dr.rect(bar, (255, 240, 150, 230), bar.get_rect(), 2, border_radius=8)
                 s.blit(bar, (x, y + k * gap - 3))
-                s.blit(gfx.buddy(0, False), (x + 10, y + k * gap + (gap - 6) // 2 - 10))
-            draw_text(s, it, (x + 46, y + k * gap + (gap - 6 - size * 1.35) / 2 - 2), size, (255, 244, 170) if sel else (214, 226, 240), bold=sel)
+                s.blit(gfx.buddy(0, False), (x + 10, y + k * gap - 3 + (gap - 6) / 2 - 7.5))
+            draw_text(s, it, (x + 46, y + k * gap - 3 + (gap - 6) / 2), size, (255, 244, 170) if sel else (214, 226, 240), bold=sel, mid=True)
 
 
 class Title:
@@ -141,35 +145,49 @@ class Options:
     def __init__(self, app):
         self.app, self.i = app, 0
 
+    def rows(self):
+        o = self.app.data["opt"]
+        r = [("music", "Music   " + "|" * o["music"] + "." * (10 - o["music"])),
+             ("sfx", "Sound   " + "|" * o["sfx"] + "." * (10 - o["sfx"])),
+             ("full", "Fullscreen: " + ("on" if o["full"] else "off"))]
+        if not core.WEB:
+            r.append(("sharp", "Graphics: " + ("sharp" if o["sharp"] else "fast")))
+        return r + [("back", "Back")]
+
     def update(self, inp):
         o = self.app.data["opt"]
+        rows = self.rows()
+        n = len(rows)
         if "up" in inp.pressed:
-            self.i = (self.i - 1) % 4
+            self.i = (self.i - 1) % n
         if "down" in inp.pressed:
-            self.i = (self.i + 1) % 4
+            self.i = (self.i + 1) % n
         d = ("right" in inp.pressed) - ("left" in inp.pressed)
-        if self.i == 0 and d:
+        row = rows[self.i][0]
+        if row == "music" and d:
             o["music"] = clamp(o["music"] + d, 0, 10)
-        elif self.i == 1 and d:
+        elif row == "sfx" and d:
             o["sfx"] = clamp(o["sfx"] + d, 0, 10)
             audio.sfx("food")
-        elif self.i == 2 and (d or "ok" in inp.pressed):
+        elif row == "full" and (d or "ok" in inp.pressed):
             o["full"] = not o["full"]
             self.app.apply_display()
-        elif (self.i == 3 and "ok" in inp.pressed) or "back" in inp.pressed:
+        elif row == "sharp" and (d or "ok" in inp.pressed):
+            self.app.set_sharp(not o["sharp"])
+        elif (row == "back" and "ok" in inp.pressed) or "back" in inp.pressed:
             self.app.save()
             self.app.pop()
         audio.set_volumes(o["music"], o["sfx"])
 
     def draw(self, s):
-        o = self.app.data["opt"]
+        rows = self.rows()
         dim(s, 120)
-        panel(s, (280, 150, 400, 250))
+        panel(s, (280, 150, 400, 112 + len(rows) * 38))
         draw_text(s, "Options", (W / 2, 164), 28, center=True, bold=True)
-        rows = ["Music   " + "|" * o["music"] + "." * (10 - o["music"]), "Sound   " + "|" * o["sfx"] + "." * (10 - o["sfx"]),
-                "Fullscreen: " + ("on" if o["full"] else "off"), "Back"]
-        for k, r in enumerate(rows):
+        for k, (_, r) in enumerate(rows):
             draw_text(s, ("> " if k == self.i else "  ") + r, (320, 220 + k * 38), 22, (255, 240, 150) if k == self.i else (220, 230, 240))
+        if not core.WEB and rows[self.i][0] == "sharp":
+            draw_text(s, "Sharp draws at twice the resolution; fast suits slower computers.", (W / 2, 166 + len(rows) * 38 + 52), 13, (170, 200, 225), center=True)
 
 
 class Slots:
@@ -252,7 +270,7 @@ class Story:
                     if k not in pool and k not in ("net", "handnet", "uvlamp", "laser", "enu", "heater", "pipette", "cut", "vortex"):
                         pool.append(k)
         self.cast = pool[:5]
-        mini = pygame.transform.smoothscale(gfx.world_map(), (240, 120))
+        mini = core.scaled(gfx.world_map(), (240, 120))
         self.mini = mini
         if music:
             audio.music(music)
@@ -271,31 +289,31 @@ class Story:
         for i, k in enumerate(self.cast):
             im = gfx.spr(k, (t // 10) % 2, True)
             s.blit(im, (pic.right - 70 - i * 62 + math.sin(t * 0.02 + i) * 8, pic.y + 60 + (i * 97) % 190 + math.sin(t * 0.05 + i) * 6))
-        s.blit(pygame.transform.scale2x(gfx.player("", (t // 7) % 2, 0, False)), (pic.x + 30 + math.sin(t * 0.03) * 10, pic.y + 140 + math.sin(t * 0.06) * 8))
+        s.blit(gfx.player("", (t // 7) % 2, 0, False, z=2), (pic.x + 30 + math.sin(t * 0.03) * 10, pic.y + 140 + math.sin(t * 0.06) * 8))
         s.set_clip(None)
-        pygame.draw.rect(s, (20, 20, 20), pic, 4)
+        dr.rect(s, (20, 20, 20), pic, 4)
         cap = "WORLD %d  -  %s" % (self.world, self.sub.upper())
         cw = core.font(15, True).size(core.pretty(cap))[0] + 20
-        pygame.draw.rect(s, (255, 222, 80), (pic.x - 8, pic.y - 14, cw, 30))
-        pygame.draw.rect(s, (20, 20, 20), (pic.x - 8, pic.y - 14, cw, 30), 3)
-        draw_text(s, cap, (pic.x + 2, pic.y - 10), 15, (20, 20, 20), bold=True, shadow=False)
+        dr.rect(s, (255, 222, 80), (pic.x - 8, pic.y - 14, cw, 30))
+        dr.rect(s, (20, 20, 20), (pic.x - 8, pic.y - 14, cw, 30), 3)
+        draw_text(s, cap, (pic.x + 2, pic.y + 1), 15, (20, 20, 20), bold=True, shadow=False, mid=True)
         # route map
         mp = pygame.Rect(36, 384, 240, 120)
         s.blit(self.mini, mp.topleft)
-        pygame.draw.rect(s, (20, 20, 20), mp, 3)
+        dr.rect(s, (20, 20, 20), mp, 3)
         pts = [(mp.x + (l["lon"] + 180) / 360 * 240, mp.y + (90 - l["lat"]) / 180 * 120) for l in LEVELS if l["world"] <= self.world]
         n = min(len(pts), 1 + t // 4)
         for i in range(1, n):
             if abs(pts[i][0] - pts[i - 1][0]) < 120:
-                pygame.draw.line(s, (220, 30, 30), pts[i - 1], pts[i], 2)
+                dr.line(s, (220, 30, 30), pts[i - 1], pts[i], 2)
         if n:
-            pygame.draw.circle(s, (220, 30, 30), pts[n - 1], 4)
+            dr.circle(s, (220, 30, 30), pts[n - 1], 4)
         draw_text(s, "The journey so far", (mp.right + 12, mp.y + 4), 14, (90, 80, 60), shadow=False)
         # narration
         draw_text(s, self.title, (486, 62), 38, (20, 20, 40), bold=True, shadow=False)
         box = pygame.Rect(486, 124, 440, 300)
-        pygame.draw.rect(s, (255, 255, 250), box)
-        pygame.draw.rect(s, (20, 20, 20), box, 3)
+        dr.rect(s, (255, 255, 250), box)
+        dr.rect(s, (20, 20, 20), box, 3)
         draw_wrapped(s, self.text[:int(t * 1.6)], (box.x + 16, box.y + 14), 19, box.w - 32, (30, 30, 40), lh=29)
         if t > 40 and t % 60 < 40:
             draw_text(s, "SPACE to continue", (box.centerx, 446), 16, (170, 50, 40), center=True, shadow=False, bold=True)
@@ -392,9 +410,9 @@ class Map:
             if i < slot["unlocked"]:
                 d = math.hypot(b[0] - a[0], b[1] - a[1]) or 1
                 for k in range(0, int(d), 12 if focus else 18):
-                    pygame.draw.circle(s, (228, 44, 44) if focus else (150, 84, 84), (a[0] + (b[0] - a[0]) * k / d - cx, a[1] + (b[1] - a[1]) * k / d - cy), 3 if focus else 2)
+                    dr.circle(s, (228, 44, 44) if focus else (150, 84, 84), (a[0] + (b[0] - a[0]) * k / d - cx, a[1] + (b[1] - a[1]) * k / d - cy), 3 if focus else 2)
             elif focus:
-                pygame.draw.line(s, (70, 95, 120), (a[0] - cx, a[1] - cy), (b[0] - cx, b[1] - cy), 2)
+                dr.line(s, (70, 95, 120), (a[0] - cx, a[1] - cy), (b[0] - cx, b[1] - cy), 2)
         # level nodes: the current world is drawn large and numbered, other worlds as small dots
         for i, lv in enumerate(LEVELS[:last + 1]):
             x, y = self.pos[i][0] - cx, self.pos[i][1] - cy
@@ -403,32 +421,32 @@ class Map:
             rec = slot["levels"].get(lv["id"], {})
             done, locked = rec.get("done"), i > slot["unlocked"]
             if lv["world"] != cw:
-                pygame.draw.circle(s, (20, 30, 50), (x, y), 6)
-                pygame.draw.circle(s, (96, 200, 124) if done else (128, 138, 152), (x, y), 4)
+                dr.circle(s, (20, 30, 50), (x, y), 6)
+                dr.circle(s, (96, 200, 124) if done else (128, 138, 152), (x, y), 4)
                 continue
             r = 15 if lv["boss"] else 13
             col = (112, 122, 138) if locked else (96, 220, 126) if done else (228, 70, 78) if lv["boss"] else (255, 226, 96)
-            pygame.draw.circle(s, (20, 30, 50), (x, y + 2), r + 4)
-            pygame.draw.circle(s, col, (x, y), r)
-            pygame.draw.circle(s, (255, 255, 255), (x - r * 0.3, y - r * 0.35), r * 0.28)
-            pygame.draw.circle(s, (20, 30, 50), (x, y), r + 1, 2)
+            dr.circle(s, (20, 30, 50), (x, y + 2), r + 4)
+            dr.circle(s, col, (x, y), r)
+            dr.circle(s, (255, 255, 255), (x - r * 0.5, y - r * 0.5), r * 0.17)
+            dr.circle(s, (20, 30, 50), (x, y), r + 1, 2)
             if self.all_pages(lv):
-                pygame.draw.circle(s, (255, 215, 0), (x, y), r + 5, 3)
-            draw_text(s, "B" if lv["boss"] else lv["id"][2:], (x, y - 11), 15, (20, 30, 50), center=True, bold=True, shadow=False)
+                dr.circle(s, (255, 215, 0), (x, y), r + 5, 3)
+            draw_text(s, "B" if lv["boss"] else lv["id"][2:], (x, y), 15, (20, 30, 50), center=True, bold=True, shadow=False, mid=True)
         # "you are here": pulsing rings on the selected level and the fish in a pin above it
         x, y = self.pos[n][0] - cx, self.pos[n][1] - cy
         pr = 24 + math.sin(t * 0.12) * 4
-        pygame.draw.circle(s, (20, 30, 50), (x, y), pr + 2, 5)
-        pygame.draw.circle(s, (255, 255, 255), (x, y), pr, 3)
-        pygame.draw.circle(s, (255, 236, 110), (x, y), pr + 8 + math.sin(t * 0.12) * 3, 2)
+        dr.circle(s, (20, 30, 50), (x, y), pr + 2, 5)
+        dr.circle(s, (255, 255, 255), (x, y), pr, 3)
+        dr.circle(s, (255, 236, 110), (x, y), pr + 8 + math.sin(t * 0.12) * 3, 2)
         fx, fy = self.fx - cx, self.fy - cy
         up = -1 if fy > 150 else 1          # near the top of the screen the pin hangs below the level instead
         by = fy + up * 64 + math.sin(t * 0.1) * 4
-        pygame.draw.polygon(s, (20, 30, 50), [(fx - 13, by - up * 18), (fx + 13, by - up * 18), (fx, fy + up * 15)])
-        pygame.draw.polygon(s, (255, 244, 170), [(fx - 8, by - up * 19), (fx + 8, by - up * 19), (fx, fy + up * 21)])
-        pygame.draw.circle(s, (20, 30, 50), (fx, by), 29)
-        pygame.draw.circle(s, (104, 188, 226), (fx, by), 26)
-        pygame.draw.circle(s, (255, 244, 170), (fx, by), 26, 3)
+        dr.polygon(s, (20, 30, 50), [(fx - 13, by - up * 18), (fx + 13, by - up * 18), (fx, fy + up * 15)])
+        dr.polygon(s, (255, 244, 170), [(fx - 8, by - up * 19), (fx + 8, by - up * 19), (fx, fy + up * 21)])
+        dr.circle(s, (20, 30, 50), (fx, by), 29)
+        dr.circle(s, (104, 188, 226), (fx, by), 26)
+        dr.circle(s, (255, 244, 170), (fx, by), 26, 3)
         im = gfx.player("", (t // 7) % 2, 0, self.face < 0)
         s.blit(im, (fx - im.get_width() / 2, by - im.get_height() / 2))
         lv = LEVELS[n]
@@ -439,11 +457,11 @@ class Map:
         tx0 = clamp(fx - tw / 2, 8, W - tw - 8)
         ly = by - 62 if up < 0 else by + 34
         panel(s, (tx0, ly, tw, 28), fill=(20, 30, 50), border=(255, 244, 170), alpha=235, radius=8)
-        draw_text(s, tag, (tx0 + 10, ly + 4), 15, (255, 250, 220), bold=True, shadow=False)
+        draw_text(s, tag, (tx0 + 10, ly + 14), 15, (255, 250, 220), bold=True, shadow=False, mid=True)
         # header
         panel(s, (14, 10, 470, 42), alpha=220)
-        draw_text(s, "World %d   %s" % (cw, WORLDS[cw]["name"]), (28, 17), 20, (255, 244, 170), bold=True)
-        draw_text(s, WORLDS[cw]["years"], (470, 22), 14, (150, 210, 250), right=True)
+        draw_text(s, "World %d   %s" % (cw, WORLDS[cw]["name"]), (28, 31), 20, (255, 244, 170), bold=True, mid=True)
+        draw_text(s, WORLDS[cw]["years"], (470, 31), 14, (150, 210, 250), right=True, mid=True)
         panel(s, (W - 314, 10, 300, 62), alpha=220)
         s.blit(gfx.icon("page"), (W - 304, 14))
         draw_text(s, "%d / %d" % (len(slot["pages"]), TOTAL_PAGES), (W - 272, 19), 15)
@@ -469,11 +487,11 @@ class Map:
             locked = i > slot["unlocked"]
             fill = (44, 50, 64) if locked else (40, 110, 70) if r2.get("done") else (130, 50, 56) if l["boss"] else (120, 100, 30)
             sel = i == n
-            pygame.draw.rect(s, fill, (bx, by2, 50, 50), border_radius=9)
-            pygame.draw.rect(s, (255, 244, 170) if sel else (20, 30, 50), (bx, by2, 50, 50), 4 if sel else 2, border_radius=9)
-            draw_text(s, "B" if l["boss"] else l["id"][2:], (bx + 25, by2 + 8), 24, (120, 130, 145) if locked else (255, 255, 255), center=True, bold=True)
+            dr.rect(s, fill, (bx, by2, 50, 50), border_radius=9)
+            dr.rect(s, (255, 244, 170) if sel else (20, 30, 50), (bx, by2, 50, 50), 4 if sel else 2, border_radius=9)
+            draw_text(s, "B" if l["boss"] else l["id"][2:], (bx + 25, by2 + 25), 24, (120, 130, 145) if locked else (255, 255, 255), center=True, bold=True, mid=True)
             if sel:
-                pygame.draw.polygon(s, (255, 244, 170), [(bx + 17, by2 - 12), (bx + 33, by2 - 12), (bx + 25, by2 - 3)])
+                dr.polygon(s, (255, 244, 170), [(bx + 17, by2 - 12), (bx + 33, by2 - 12), (bx + 25, by2 - 3)])
             marks = [r2.get("done")] if l["boss"] else [r2.get("done"), self.all_pages(l), r2.get("danio")]
             for q, on in enumerate(marks):
                 star(s, bx + 25 + (q - (len(marks) - 1) / 2) * 16, by2 + 62, 7, (255, 214, 60) if on else (60, 70, 90))
@@ -572,7 +590,7 @@ class Pause:
             for i in range(3):
                 s.blit(gfx.icon("page" if play.pages[i] else "page0"), (372 + i * 30, 150))
             for i in range(5):
-                draw_text(s, "DANIO"[i], (480 + i * 20, 154), 18, (255, 205, 60) if play.letters[i] else (70, 80, 100), bold=True)
+                s.blit(gfx.coin("DANIO"[i], bool(play.letters[i]), 18), (480 + i * 20, 158))
         self.menu.draw(s, 300, 196, 19, 40, 360)
         draw_text(s, self.menu.hint or "ESC: resume", (W / 2, 446), 13, (170, 200, 220), center=True)
 
@@ -657,7 +675,7 @@ class Result:
                 elif k == self.sel:
                     col = (255, 240, 150)
                 panel(s, (170, y + 10 + k * 48, 620, 40), border=col, alpha=200)
-                draw_text(s, o, (W / 2, y + 18 + k * 48), 17, col, center=True)
+                draw_text(s, o, (W / 2, y + 30 + k * 48), 17, col, center=True, mid=True)
             if self.answer is not None:
                 ok = self.answer == self.correct
                 draw_text(s, ("Correct!" if ok else "Wrong. The answer is in green.") if not self.first else
@@ -682,7 +700,7 @@ class Result:
                     sel = k == self.ci
                     panel(s, (x0 + k * 200, 462, 180, 36), fill=(60, 54, 20) if sel else (18, 30, 52),
                           border=(255, 240, 150) if sel else (90, 130, 170), alpha=240)
-                    draw_text(s, c, (x0 + k * 200 + 90, 468), 16, (255, 244, 170) if sel else (200, 215, 230), center=True, bold=sel)
+                    draw_text(s, c, (x0 + k * 200 + 90, 480), 16, (255, 244, 170) if sel else (200, 215, 230), center=True, bold=sel, mid=True)
 
 
 class Pedia:
@@ -825,7 +843,7 @@ class Certificate:
             pass
 
     def _render(self):
-        self.preview = pygame.transform.smoothscale(certificate.render(self.name, self.st), (636, 450))
+        self.preview = core.scaled(certificate.render(self.name, self.st), (636, 450))
 
     def set_name(self, name):
         self.name = name.strip()[:44]
@@ -874,7 +892,7 @@ class Certificate:
         st = self.st
         s.fill((10, 18, 36))
         draw_text(s, "Your certificate", (16, 8), 24, (255, 244, 170), bold=True)
-        pygame.draw.rect(s, (255, 244, 170), (13, 43, 638, 452), 1)
+        dr.rect(s, (255, 244, 170), (13, 43, 638, 452), 1)
         s.blit(self.preview, (14, 44))
         x, y = 664, 44
         for i, (title, _, col, how) in enumerate(certificate.TIERS):
@@ -883,13 +901,13 @@ class Certificate:
             draw_text(s, title.replace("Certificate of ", ""), (x + 22, y - 2), 15, (255, 255, 255) if got else (140, 150, 165), bold=True)
             y += 20
             for text, ok in st["reqs"][i]:
-                pygame.draw.circle(s, (110, 230, 130) if ok else (230, 110, 110), (x + 27, y + 8), 3)
+                dr.circle(s, (110, 230, 130) if ok else (230, 110, 110), (x + 27, y + 8), 3)
                 draw_text(s, text, (x + 36, y), 12, (200, 215, 230) if ok else (230, 170, 170), shadow=False)
                 y += 16
             y += 6
         y = max(y + 4, 318)
         draw_text(s, "Name on the certificate", (x, y), 12, (150, 210, 250))
-        pygame.draw.rect(s, (255, 244, 170) if self.editing else (90, 130, 170), (x, y + 18, 282, 30), 2, border_radius=6)
+        dr.rect(s, (255, 244, 170) if self.editing else (90, 130, 170), (x, y + 18, 282, 30), 2, border_radius=6)
         shown = self.name + ("|" if self.editing and self.t % 40 < 20 else "")
         draw_text(s, shown[-30:], (x + 8, y + 23), 15, shadow=False)
         if self.editing:
@@ -905,14 +923,12 @@ class App:
         self.headless = headless
         self.data = core.load_all()
         self.data["opt"]["full"] = False   # always start in a window; F11 or Options switches to fullscreen
+        self.data["opt"].setdefault("sharp", True)
+        # pixels per point: 2 ("sharp") on the desktop; the browser stays at 1 for speed
+        gfx.set_scale(1 if core.WEB or not self.data["opt"]["sharp"] else int(os.environ.get("ZF_SCALE", 2)))
         self.slot_i = 0
-        self.screen = None
+        self.screen = self.display = None
         self.apply_display()
-        pygame.display.set_caption(core.TITLE)
-        try:
-            pygame.display.set_icon(pygame.transform.scale(gfx.player("", 0, 0, False), (64, 32)))
-        except Exception:
-            pass
         if not headless:
             audio.init()
             audio.set_volumes(self.data["opt"]["music"], self.data["opt"]["sfx"])
@@ -923,23 +939,83 @@ class App:
         self.events = []
         self.show_fps = False
         self.work_ms = 0.0
+        self.slow = 0
         self.stack = [Title(self)]
 
     @property
     def slot(self):
         return self.data["slots"][self.slot_i]
 
-    def apply_display(self):
-        if core.WEB:                      # the browser page scales the canvas itself
-            self.screen = pygame.display.set_mode((W, H))
+    def set_sharp(self, sharp):
+        """Switch between sharp (2 pixels per point) and fast (1) graphics while running."""
+        self.data["opt"]["sharp"] = sharp
+        k = 2 if sharp else 1
+        if core.WEB or k == core.K:
             return
-        flags = pygame.SCALED | pygame.RESIZABLE
-        if self.data["opt"]["full"] and not self.headless:
-            flags |= pygame.FULLSCREEN
+        gfx.set_scale(k)
+        _dims.clear()
+        level_mod._plants.clear()
+        for sc in self.stack:
+            lv = getattr(sc, "level", None)
+            if lv is not None:
+                lv._chunks.clear()
+            if isinstance(sc, Story):
+                sc.mini = core.scaled(gfx.world_map(), (240, 120))
+            if isinstance(sc, Certificate):
+                sc._render()
+        self.apply_display()
+
+    def apply_display(self):
+        """The game draws on self.screen, addressed in points (960 x 540). On the desktop the window
+        surface has core.K pixels per point and SDL scales it smoothly to the window or monitor."""
+        if core.WEB:                      # the browser page scales the canvas itself
+            self.screen = self.display = pygame.display.set_mode((W, H))
+            return
+        k = core.K
+        full = self.data["opt"]["full"] and not self.headless
+        if self.display is not None:
+            # pygame can crash when a SCALED window changes mode in place (fullscreen, or a new
+            # resolution), so the window is closed and opened afresh, where it was
+            if not self.headless and not getattr(self, "_full", False):
+                try:
+                    win = pygame.Window.from_display_module()
+                    self._geom = (win.size, win.position)
+                except Exception:
+                    pass
+            pygame.display.quit()
+            pygame.display.init()
+        self._full = full
+        flags = pygame.SCALED | pygame.RESIZABLE | (pygame.FULLSCREEN if full else 0)
         try:
-            self.screen = pygame.display.set_mode((W, H), flags, vsync=1)
+            self.display = pygame.display.set_mode((W * k, H * k), flags, vsync=1)
         except pygame.error:
-            self.screen = pygame.display.set_mode((W, H))
+            self.display = pygame.display.set_mode((W * k, H * k))
+        if not full and not self.headless:
+            self._fit_window(getattr(self, "_geom", None))
+        self.screen = self.display if k == 1 else core.Canvas(self.display, k)
+        pygame.display.set_caption(core.TITLE)
+        try:
+            pygame.display.set_icon(pygame.transform.smoothscale(gfx.player("", 0, 0, False), (64, 32)))
+        except Exception:
+            pass
+
+    def _fit_window(self, geom=None):
+        """Open the window as large as fits comfortably on the monitor (or as it was)."""
+        try:
+            win = pygame.Window.from_display_module()
+            win.minimum_size = (W // 2, H // 2)      # SCALED would otherwise forbid anything below 1920 x 1080
+            if geom:
+                win.size, win.position = geom
+                return
+            dw, dh = pygame.display.get_desktop_sizes()[0]
+            m = max([z for z in (1, 1.25, 1.5, 2, 2.5, 3) if W * z <= dw * 0.92 and H * z <= dh * 0.86] or [1])
+            win.size = (int(W * m), int(H * m))
+            win.position = pygame.WINDOWPOS_CENTERED
+        except Exception:
+            pass
+
+    def present(self):
+        pygame.display.flip()
 
     def push(self, sc):
         self.stack.append(sc)
@@ -1013,6 +1089,15 @@ class App:
             self.saved_t -= 1
             draw_text(self.screen, "Game saved", (W - 16, H - 24), 14, (160, 255, 180), right=True)
         self.work_ms = self.work_ms * 0.95 + (pygame.time.get_ticks() - t0) * 0.05
+        top = self.stack[-1]
+        if core.K > 1 and isinstance(top, Play) and top.state == "play" and not self.headless:
+            # a computer that cannot draw the sharp picture in time gets the fast one
+            self.slow = self.slow + 1 if self.work_ms > 12 else max(0, self.slow - 3)
+            if self.slow > 240:
+                self.slow = 0
+                self.set_sharp(False)
+                self.save()
+                top.toast = ["Graphics set to fast for smoother play (Options to change)", 240]
         if self.show_fps and core.WEB and pygame.time.get_ticks() - getattr(self, "_rep", 0) > 1000:
             self._rep = pygame.time.get_ticks()
             try:
@@ -1038,7 +1123,7 @@ class App:
                     self.data["opt"]["full"] = not self.data["opt"]["full"]
                     self.apply_display()
             self.frame(events, 1 if dt < 25 else 2 if dt < 42 else 3)
-            pygame.display.flip()
+            self.present()
             dt = self.clock.tick(core.FPS)
             await asyncio.sleep(0)        # lets the browser draw; harmless on the desktop
         if self.slot_i is not None:

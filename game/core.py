@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Shared constants, input, text and save helpers."""
 import json
+import math
 import os
 import sys
 import pygame
@@ -59,22 +60,274 @@ class Input:
         return x, y
 
 
+# ---------------------------------------------------------------- render scale
+# Every position in the game is in points on a 960 x 540 stage. The picture itself is drawn
+# with K pixels per point (2 on the desktop, 1 in the browser), so sprites and text stay sharp
+# when the window is enlarged. Hi is a surface addressed in points; dr draws on it.
+K = 1
+PD = pygame.draw
+
+
+def _px(n, k):
+    return n // k if n % k == 0 else n / k
+
+
+class Hi(pygame.Surface):
+    """A surface addressed in points; it holds k pixels per point."""
+
+    def __init__(self, size, flags=0, k=None, real=False):
+        k = K if k is None else k
+        if not real:
+            size = (max(1, int(math.ceil(size[0] * k - 1e-6))), max(1, int(math.ceil(size[1] * k - 1e-6))))
+        pygame.Surface.__init__(self, size, flags)
+        self.k = k
+
+    def get_width(self):
+        return _px(pygame.Surface.get_width(self), self.k)
+
+    def get_height(self):
+        return _px(pygame.Surface.get_height(self), self.k)
+
+    def get_size(self):
+        return self.get_width(), self.get_height()
+
+    def get_rect(self, **kw):
+        r = pygame.Rect((0, 0), self.get_size())
+        for a, v in kw.items():
+            setattr(r, a, v)
+        return r
+
+    def real_size(self):
+        return pygame.Surface.get_size(self)
+
+    def blit(self, src, dest, area=None, special_flags=0):
+        k = self.k
+        sk = getattr(src, "k", None)
+        if sk != k:
+            src = rescale(src, sk or 1, k)
+        if area is not None:
+            area = (round(area[0] * k), round(area[1] * k), round(area[2] * k), round(area[3] * k))
+        return pygame.Surface.blit(self, src, (round(dest[0] * k), round(dest[1] * k)), area, special_flags)
+
+    def fill(self, color, rect=None, special_flags=0):
+        if rect is not None:
+            k = self.k
+            x, y = rect[0] * k, rect[1] * k
+            rect = (round(x), round(y), round(x + rect[2] * k) - round(x), round(y + rect[3] * k) - round(y))
+        return pygame.Surface.fill(self, color, rect, special_flags)
+
+    def set_at(self, pos, color):
+        k = self.k
+        pygame.Surface.fill(self, color, (int(pos[0] * k), int(pos[1] * k), int(k), int(k)))
+
+    def get_at(self, pos):
+        return pygame.Surface.get_at(self, (int(pos[0] * self.k), int(pos[1] * self.k)))
+
+    def set_clip(self, rect=None):
+        pygame.Surface.set_clip(self, None if rect is None else _rk(rect, self.k))
+
+    def subsurface(self, rect):
+        k = self.k
+        s = pygame.Surface.subsurface(self, (round(rect[0] * k), round(rect[1] * k), round(rect[2] * k), round(rect[3] * k)))
+        s.k = k
+        return s
+
+    def copy(self):
+        s = pygame.Surface.copy(self)
+        s.k = self.k
+        return s
+
+
+Hi.upscaled = 0     # how many plain surfaces had to be enlarged on the fly (should stay small)
+
+
+class Canvas:
+    """The window surface addressed in points, so the game draws straight onto it (no copy)."""
+
+    def __init__(self, surf, k):
+        self.surf, self.k = surf, k
+
+    def get_width(self):
+        return _px(self.surf.get_width(), self.k)
+
+    def get_height(self):
+        return _px(self.surf.get_height(), self.k)
+
+    def get_size(self):
+        return self.get_width(), self.get_height()
+
+    def get_rect(self, **kw):
+        return Hi.get_rect(self, **kw)
+
+    def blit(self, src, dest, area=None, special_flags=0):
+        k = self.k
+        if getattr(src, "k", None) != k:
+            src = rescale(src, getattr(src, "k", 1), k)
+        if area is not None:
+            area = (round(area[0] * k), round(area[1] * k), round(area[2] * k), round(area[3] * k))
+        return self.surf.blit(src, (round(dest[0] * k), round(dest[1] * k)), area, special_flags)
+
+    def fill(self, color, rect=None, special_flags=0):
+        if rect is not None:
+            rect = _rk(rect, self.k)
+        return self.surf.fill(color, rect, special_flags)
+
+    def set_at(self, pos, color):
+        k = self.k
+        self.surf.fill(color, (int(pos[0] * k), int(pos[1] * k), int(k), int(k)))
+
+    def get_at(self, pos):
+        return self.surf.get_at((int(pos[0] * self.k), int(pos[1] * self.k)))
+
+    def set_clip(self, rect=None):
+        self.surf.set_clip(None if rect is None else _rk(rect, self.k))
+
+
+def rescale(src, sk, k):
+    """Return src (sk pixels per point) as a surface with k pixels per point."""
+    Hi.upscaled += 1
+    w, h = pygame.Surface.get_size(src)
+    size = (max(1, round(w * k / sk)), max(1, round(h * k / sk)))
+    if src.get_bitsize() not in (24, 32):
+        src = src.convert_alpha() if src.get_flags() & pygame.SRCALPHA else src.convert()
+    out = pygame.transform.smoothscale(src, size)
+    if k != 1:
+        out = adopt(out, k)
+    return out
+
+
+def adopt(surf, k=None):
+    """Wrap a plain surface whose pixels are already at k per point as a Hi surface."""
+    k = K if k is None else k
+    alpha = surf.get_flags() & pygame.SRCALPHA
+    h = Hi(pygame.Surface.get_size(surf), pygame.SRCALPHA if alpha else 0, k, real=True)
+    if alpha:
+        pygame.Surface.blit(h, surf, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+    else:
+        pygame.Surface.blit(h, surf, (0, 0))
+    return h
+
+
+def hsurf(w, h, alpha=True):
+    """A new blank surface of w x h points at the current render scale."""
+    return Hi((w, h), pygame.SRCALPHA if alpha else 0)
+
+
+def scaled(src, size):
+    """src (plain or Hi) smoothly resized to size points, as a Hi surface."""
+    out = pygame.transform.smoothscale(src, (max(1, round(size[0] * K)), max(1, round(size[1] * K))))
+    return adopt(out)
+
+
+def _wd(w, k):
+    return 0 if not w else max(1, int(round(w * k)))
+
+
+def _pts(pts, k):
+    return [(x * k, y * k) for x, y in pts]
+
+
+def _rk(r, k):
+    x, y = r[0] * k, r[1] * k
+    return (round(x), round(y), round(x + r[2] * k) - round(x), round(y + r[3] * k) - round(y))
+
+
+class dr:
+    """pygame.draw for surfaces addressed in points (plain surfaces pass straight through)."""
+    @staticmethod
+    def circle(s, c, p, r, width=0, **kw):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        if k == 1:
+            return PD.circle(s, c, p, r, width, **kw)
+        return PD.circle(s, c, (p[0] * k, p[1] * k), r * k, _wd(width, k), **kw)
+
+    @staticmethod
+    def ellipse(s, c, r, width=0):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        return PD.ellipse(s, c, r if k == 1 else _rk(r, k), _wd(width, k))
+
+    @staticmethod
+    def rect(s, c, r, width=0, border_radius=0, **kw):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        if k == 1:
+            return PD.rect(s, c, r, width, border_radius, **kw)
+        kw = {a: int(round(v * k)) for a, v in kw.items()}
+        return PD.rect(s, c, _rk(r, k), _wd(width, k), int(round(border_radius * k)), **kw)
+
+    @staticmethod
+    def line(s, c, a, b, width=1):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        if k == 1:
+            return PD.line(s, c, a, b, width)
+        return PD.line(s, c, (a[0] * k, a[1] * k), (b[0] * k, b[1] * k), _wd(width, k))
+
+    @staticmethod
+    def lines(s, c, closed, pts, width=1):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        return PD.lines(s, c, closed, pts if k == 1 else _pts(pts, k), _wd(width, k))
+
+    @staticmethod
+    def polygon(s, c, pts, width=0):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        return PD.polygon(s, c, pts if k == 1 else _pts(pts, k), _wd(width, k))
+
+    @staticmethod
+    def arc(s, c, r, a0, a1, width=1):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        return PD.arc(s, c, r if k == 1 else _rk(r, k), a0, a1, _wd(width, k))
+
+    @staticmethod
+    def aaline(s, c, a, b):
+        k = getattr(s, "k", 1)
+        s = getattr(s, "surf", s)
+        if k == 1:
+            return PD.aaline(s, c, a, b)
+        return PD.line(s, c, (a[0] * k, a[1] * k), (b[0] * k, b[1] * k), _wd(1, k))
+
+
+# ---------------------------------------------------------------- text
 _fonts = {}
-_NAMES = ["segoeui", "verdana", "helveticaneue", "helvetica", "tahoma", "arial", "dejavusans"]
+_fontdata = {}
+_capmid = {}      # top of a rendered line to the middle of its capitals, in pixels
+
+
+_SIZE = (0.93, 0.97)      # Inter runs wider than the Segoe UI the layouts were made with
 
 
 def font(size, bold=False):
+    """Inter (bundled), so text looks the same on Windows, macOS and in the browser.
+    size is the nominal size the layouts were designed for."""
     k = (size, bold)
     if k not in _fonts:
-        f = None
+        import io
+        if bold not in _fontdata:
+            import base64
+            import fontdata
+            _fontdata[bold] = base64.b64decode("".join(fontdata.BOLD if bold else fontdata.REGULAR))
+        px = max(4, int(round(size * _SIZE[bool(bold)])))
         try:
-            path = pygame.font.match_font(_NAMES, bold=bold)
-            if path:
-                f = pygame.font.Font(path, size)
-        except Exception:
-            f = None
-        if f is None:
+            try:
+                f = pygame.font.Font(io.BytesIO(_fontdata[bold]), px)
+            except Exception:
+                # the browser build cannot read a font from memory: give it a file instead
+                import tempfile
+                path = os.path.join(tempfile.gettempdir(), "zebrafish-inter-%d.ttf" % bool(bold))
+                if not os.path.exists(path) or os.path.getsize(path) != len(_fontdata[bold]):
+                    with open(path, "wb") as fh:
+                        fh.write(_fontdata[bold])
+                f = pygame.font.Font(path, px)
+            _capmid[k] = f.get_ascent() - px * 0.364         # Inter's capitals are 0.727 em tall
+        except Exception as e:
+            print("font: falling back to the default font:", e)
             f = pygame.font.Font(None, int(size * 1.25))
+            _capmid[k] = f.get_ascent() * 0.6
         _fonts[k] = f
     return _fonts[k]
 
@@ -99,23 +352,39 @@ def text_surf(t, size, color, bold=False):
         if len(_tcache) > 600:
             _tcache.clear()
         s = font(size, bold).render(t, True, color)
+        if color == (0, 0, 0):
+            s.set_alpha(130)          # shadows: soft, so letters never look doubled
         _tcache[k] = s
     return s
 
 
 def draw_text(surf, t, pos, size=18, color=(255, 255, 255), center=False, bold=False,
-              shadow=True, right=False):
+              shadow=True, right=False, mid=False):
+    """Draw one line. pos is the top-left (or top-centre / top-right) of the line as the
+    layouts were designed; with mid=True, pos[1] is where the middle of the capitals goes,
+    which is the way to centre a label on a shape. Returns the width in points."""
     t = pretty(str(t))
-    s = text_surf(t, size, color, bold)
-    x, y = pos
+    k = getattr(surf, "k", 1)
+    s = text_surf(t, size * k, color, bold)
+    x, y = pos[0] * k, pos[1] * k
+    w = s.get_width()
     if center:
-        x -= s.get_width() // 2
+        x -= w / 2
     elif right:
-        x -= s.get_width()
+        x -= w
+    y -= _capmid[(size * k, bold)]
+    if not mid:
+        y += 0.75 * size * k                  # where the capitals sat in the original layouts
+    x, y = round(x), round(y)
+    real = getattr(surf, "surf", surf)
     if shadow:
-        surf.blit(text_surf(t, size, (0, 0, 0), bold), (x + 1, y + 2))
-    surf.blit(s, (x, y))
-    return s.get_width()
+        pygame.Surface.blit(real, text_surf(t, size * k, (0, 0, 0), bold), (x + k, y + 2 * k))
+    pygame.Surface.blit(real, s, (x, y))
+    return w / k
+
+
+def text_width(t, size, bold=False):
+    return font(size, bold).size(pretty(str(t)))[0]
 
 
 def wrap(t, size, width, bold=False):
@@ -155,9 +424,9 @@ def panel(surf, rect, fill=(18, 30, 52), border=(120, 190, 230), alpha=235, radi
     if s is None:
         if len(_panels) > 200:
             _panels.clear()
-        s = pygame.Surface(r.size, pygame.SRCALPHA)
-        pygame.draw.rect(s, fill + (alpha,), s.get_rect(), border_radius=radius)
-        pygame.draw.rect(s, border + (255,), s.get_rect(), 2, border_radius=radius)
+        s = hsurf(*r.size)
+        dr.rect(s, fill + (alpha,), s.get_rect(), border_radius=radius)
+        dr.rect(s, border + (255,), s.get_rect(), 2, border_radius=radius)
         _panels[key] = s
     surf.blit(s, r.topleft)
 
