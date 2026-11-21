@@ -6,6 +6,8 @@ Oregon, the big mutagenesis screens and the genome project, to today's CRISPR-er
 organism. 6 worlds + a bonus world, 39 levels, 6 bosses, 135 collectible "lab notebook"
 pages of zebrafish history and a quiz after every level.
 
+Made by the [Juan Lab](https://juanlab.org), Uppsala University.
+
 ## Play
 
 **In a browser:** on [juanlab.org](https://juanlab.org/#games), press *Play in browser* (needs a
@@ -88,7 +90,8 @@ columns, and three stars per level on the map (cleared / all pages / D-A-N-I-O).
 
 ## Source
 
-Everything is in `game/` (Python + pygame-ce; all graphics and sound are generated in code).
+Everything is in `game/` (Python + pygame-ce; all graphics and sound are generated in code,
+except `game/juanlab.png`, the lab logo shown at start-up).
 `facts.py` holds the historical facts and quiz questions if you want to correct or extend them.
 Rebuild the Windows exe with `build_windows.bat`.
 

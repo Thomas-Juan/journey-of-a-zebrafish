@@ -33,14 +33,14 @@ jobs:
         shell: bash
         run: |
           python -m PyInstaller --noconfirm --onefile --windowed --name JourneyOfAZebrafish \
-            --icon game/icon.ico --paths game --exclude-module tkinter game/main.py
+            --icon game/icon.ico --add-data "game/juanlab.png;." --paths game --exclude-module tkinter game/main.py
           cp dist/JourneyOfAZebrafish.exe "${{ matrix.asset }}"
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
           python -m PyInstaller --noconfirm --windowed --name "Journey of a Zebrafish" \
-            --icon game/icon.icns --paths game --exclude-module tkinter game/main.py
+            --icon game/icon.icns --add-data "game/juanlab.png:." --paths game --exclude-module tkinter game/main.py
           ditto -c -k --keepParent "dist/Journey of a Zebrafish.app" "${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4

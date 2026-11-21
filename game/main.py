@@ -98,6 +98,45 @@ class Menu:
             draw_text(s, it, (x + 46, y + k * gap - 3 + (gap - 6) / 2), size, (255, 244, 170) if sel else (214, 226, 240), bold=sel, mid=True)
 
 
+class Splash:
+    """The Juan Lab logo for two seconds at start-up. Any key or click skips it."""
+    overlay = False
+    LENGTH = 150                    # frames, fades included
+    FADE = 24
+    PAPER, INK, MUTED, NIGHT = (248, 243, 234), (31, 27, 51), (106, 100, 121), (4, 10, 24)
+
+    def __init__(self, app):
+        self.app = app
+        self.t = 0
+        try:
+            img = pygame.image.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "juanlab.png")).convert_alpha()
+            self.logo = core.scaled(img, (150, 150))
+        except Exception:
+            self.logo = None
+        self.veil = hsurf(W, H)
+
+    def update(self, inp):
+        self.t += 1
+        skip = inp.pressed or any(e.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN) for e in self.app.events)
+        if skip and self.t < self.LENGTH - self.FADE:
+            self.t = self.LENGTH - self.FADE
+        if self.t >= self.LENGTH:
+            title = Title(self.app)
+            title.update(core.Input())     # builds its menu before the first draw; no keys pressed
+            self.app.stack[-1] = title
+
+    def draw(self, s):
+        s.fill(self.PAPER)
+        if self.logo is not None:
+            s.blit(self.logo, (W / 2 - 75, 128))
+        draw_text(s, "Juan Lab", (W / 2, 330), 36, self.INK, center=True, bold=True, shadow=False, mid=True)
+        draw_text(s, "Uppsala University", (W / 2, 372), 17, self.MUTED, center=True, shadow=False, mid=True)
+        a = 1 - min(1, self.t / self.FADE, (self.LENGTH - self.t) / self.FADE)
+        if a > 0:
+            self.veil.fill(self.NIGHT + (int(255 * a),))
+            s.blit(self.veil, (0, 0))
+
+
 class Title:
     overlay = False
 
@@ -943,7 +982,7 @@ class App:
         self.show_fps = False
         self.work_ms = 0.0
         self.slow = 0
-        self.stack = [Title(self)]
+        self.stack = [Title(self) if headless else Splash(self)]
 
     @property
     def slot(self):
