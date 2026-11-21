@@ -25,7 +25,7 @@ keyboard; progress is kept in that browser).
   `pip install pygame-ce numpy`, then `python game/main.py`
   (on macOS you can double-click `run_from_source.command`).
 
-To build the downloads yourself: `build_windows.bat` on Windows, `build_mac.command` on a Mac.
+To build the downloads yourself: `build_windows.bat` on Windows (the program goes to `dist/`), `build_mac.command` on a Mac (to `dist-mac/`).
 Pushing a tag such as `v1.0` to GitHub builds both automatically and attaches them to a release.
 
 ## Controls
