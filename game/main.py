@@ -16,6 +16,9 @@ import sys
 
 # the stage is drawn at twice its size and SDL scales it to the window: smoothly, not in blocks
 os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "linear")
+# pygame only allows fractional window scaling when a hint with this literal name is set; without
+# it a window smaller than the 1920 x 1080 picture is scaled by 0 and stays black
+os.environ.setdefault("SDL_HINT_RENDER_SCALE_QUALITY", "1")
 import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
